@@ -33,13 +33,13 @@ UNIVERSE: list[str] = [
     "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS",
     "LT.NS", "AXISBANK.NS", "BAJFINANCE.NS", "ASIANPAINT.NS", "MARUTI.NS",
     "HCLTECH.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS",
-    "NESTLEIND.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAMOTORS.NS",
+    "NESTLEIND.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TMPV.NS",
     "TATASTEEL.NS", "JSWSTEEL.NS", "M&M.NS", "ADANIENT.NS", "ADANIPORTS.NS",
     "COALINDIA.NS", "GRASIM.NS", "HINDALCO.NS", "BAJAJFINSV.NS", "TECHM.NS",
-    "INDUSINDBK.NS", "DRREDDY.NS", "CIPLA.NS", "DIVISLAB.NS", "BRITANNIA.NS",
-    "EICHERMOT.NS", "HEROMOTOCO.NS", "BAJAJ-AUTO.NS", "APOLLOHOSP.NS",
-    "TATACONSUM.NS", "BPCL.NS", "SBILIFE.NS", "HDFCLIFE.NS", "LTIM.NS",
-    "SHRIRAMFIN.NS",
+    "BEL.NS", "DRREDDY.NS", "CIPLA.NS", "ETERNAL.NS", "TRENT.NS",
+    "EICHERMOT.NS", "INDIGO.NS", "BAJAJ-AUTO.NS", "APOLLOHOSP.NS",
+    "TATACONSUM.NS", "JIOFIN.NS", "SBILIFE.NS", "HDFCLIFE.NS", "SHRIRAMFIN.NS",
+    "MAXHEALTH.NS",
 ]
 
 
@@ -96,14 +96,27 @@ def _fetch_yfinance(
                 df["ticker"] = tickers[0] if len(tickers) == 1 else "UNKNOWN"
                 df = df.reset_index().rename(columns={"Date": "date"})
 
-            df = df.rename(columns={"date": "date"})
             df["date"] = pd.to_datetime(df["date"]).dt.normalize()
             df = df.dropna(subset=["close"])
             df = df[df["close"] > 0]
+
+            # Identify tickers that came back with no data and retry them individually
+            loaded = set(df["ticker"].unique())
+            missing = [t for t in tickers if t not in loaded]
+            if missing:
+                individual = _retry_tickers_individually(missing, start, end)
+                if individual is not None and not individual.empty:
+                    df = pd.concat([df, individual], ignore_index=True)
+                    df = df.drop_duplicates(subset=["ticker", "date"])
+
             print(
                 f"[ingestion] yfinance: {df['ticker'].nunique()} tickers, "
                 f"{df['date'].min().date()} → {df['date'].max().date()}"
             )
+            if missing:
+                still_missing = [t for t in tickers if t not in set(df["ticker"].unique())]
+                if still_missing:
+                    print(f"[ingestion] WARNING: could not load {still_missing} — excluded from universe")
             return df
         except Exception as e:
             if attempt < max_retries - 1:
@@ -112,6 +125,43 @@ def _fetch_yfinance(
                 print(f"[ingestion] yfinance failed after {max_retries} attempts: {e}")
                 return None
     return None
+
+
+def _retry_tickers_individually(
+    tickers: list[str], start: str, end: str
+) -> Optional[pd.DataFrame]:
+    """Try downloading failed tickers one-by-one with alternate symbol variants."""
+    import yfinance as yf
+
+    # Some NSE tickers have known yfinance symbol differences
+    ALIASES: dict[str, list[str]] = {
+        "M&M.NS": ["M&M.NS", "MM.NS"],
+    }
+
+    frames = []
+    for ticker in tickers:
+        candidates = ALIASES.get(ticker, [ticker])
+        for symbol in candidates:
+            try:
+                raw = yf.download(symbol, start=start, end=end,
+                                  progress=False, auto_adjust=True)
+                if raw.empty:
+                    continue
+                raw = raw.reset_index()
+                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+                sub = raw[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+                sub.columns = ["date", "open", "high", "low", "close", "volume"]
+                sub["ticker"] = ticker  # use original symbol for consistency
+                sub["date"] = pd.to_datetime(sub["date"]).dt.normalize()
+                sub = sub.dropna(subset=["close"])
+                sub = sub[sub["close"] > 0]
+                if not sub.empty:
+                    frames.append(sub)
+                    break
+            except Exception:
+                continue
+
+    return pd.concat(frames, ignore_index=True) if frames else None
 
 
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 import warnings
@@ -31,13 +32,19 @@ from src.data.validation import run_all_gates, DataQualityError
 from src.features.engineer import build_features
 from src.labels.targets import add_labels
 from src.labels.weights import sample_weights
-from src.models.trainer import train_xgb, tune_hyperparameters, fit_final_model, _BASE_PARAMS_CLF, _BASE_PARAMS_REG
+from src.models.trainer import (
+    train_xgb, tune_hyperparameters, fit_final_model,
+    _BASE_PARAMS_CLF, _BASE_PARAMS_REG, _get_xgb,
+    set_device, apply_device, get_device,
+)
 from src.models.calibration import TimeOrderedCalibrator
 from src.validation.walk_forward import PurgedWalkForward
 from src.validation.metrics import information_coefficient, directional_accuracy, summarise
 from src.backtest.engine import run_backtest, sensitivity_analysis
 
 warnings.filterwarnings("ignore")
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -64,8 +71,19 @@ def _walk_forward_predict(
     all_preds = []
     last_train_idx = None
 
+    rebal_points = list(range(cfg.train_min_days, len(dates) - cfg.horizon, cfg.rebalance_every))
+    n_steps = len(rebal_points)
+    logger.info(
+        "Walk-forward: %d rebalance steps from %s to %s (device=%s)",
+        n_steps,
+        pd.Timestamp(dates[rebal_points[0]]).date() if n_steps else "n/a",
+        pd.Timestamp(dates[rebal_points[-1]]).date() if n_steps else "n/a",
+        get_device(),
+    )
+    t_wf = time.time()
+
     # Use all unique dates as rebalance points spaced rebalance_every apart
-    for i in range(cfg.train_min_days, len(dates) - cfg.horizon, cfg.rebalance_every):
+    for step, i in enumerate(rebal_points):
         rebal_date = dates[i]
         cutoff_date = dates[max(0, i - cfg.embargo - cfg.horizon)]
 
@@ -120,7 +138,8 @@ def _walk_forward_predict(
 # Latest-bar signal generation
 # ---------------------------------------------------------------------------
 def predict_latest(
-    df: pd.DataFrame,
+    df_labeled: pd.DataFrame,          # training data — has valid target column
+    df_full: pd.DataFrame,             # full feature frame — includes post-label dates
     feature_cols: list[str],
     target_col: str,
     cfg: Config,
@@ -130,46 +149,49 @@ def predict_latest(
     calibrator: TimeOrderedCalibrator | None = None,
     top_n: int = 10,
 ) -> pd.DataFrame:
-    """Retrain on all available data and score the most-recent bar."""
-    df_train = df.dropna(subset=feature_cols + [target_col])
-    latest_date = df["date"].max()
-    latest_df = df[df["date"] == latest_date].dropna(subset=feature_cols)
+    """Retrain on all labeled data and score the actual latest price date.
+
+    The distinction between df_labeled and df_full matters:
+      df_labeled has targets for dates up to (end - horizon); used for training.
+      df_full has features for all dates including the most-recent `horizon` bars
+      that have no label yet; used for scoring.
+    """
+    df_train = df_labeled.dropna(subset=feature_cols + [target_col])
+
+    # Actual latest date in the price feed (may be horizon bars beyond last label)
+    latest_date = df_full["date"].max()
+    latest_df = df_full[df_full["date"] == latest_date].dropna(subset=feature_cols)
 
     if df_train.empty or latest_df.empty:
         return pd.DataFrame(columns=["ticker", "score", "signal"])
 
-    # Small validation window for early stopping
-    dates_sorted = np.sort(df_train["date"].unique())
-    val_date = dates_sorted[max(0, len(dates_sorted) - 21)]
-    val_df = df_train[df_train["date"] >= val_date]
-    train_df = df_train[df_train["date"] < val_date]
+    # For the final production model we use a fixed n_estimators (no early stopping).
+    # Early stopping requires a held-out val set; the val window here is only ~21 days
+    # which is too small and causes the model to stop at round 0, collapsing all
+    # predictions to the base rate.  We use the n_estimators chosen by Optuna instead.
+    params_no_es = {k: v for k, v in best_params.items() if k != "early_stopping_rounds"}
 
-    if train_df.empty:
-        return pd.DataFrame()
-
-    sw_tr = sw[train_df.index] if sw is not None else None
-
-    model = train_xgb(
-        train_df[feature_cols], train_df[target_col],
-        val_df[feature_cols], val_df[target_col],
-        params=best_params,
-        sample_weight=sw_tr,
-        early_stopping=cfg.xgb_early_stopping,
-        task=task,
-    )
+    xgb = _get_xgb()
+    sw_tr = sw[df_train.index] if sw is not None else None
 
     if task == "classification":
+        y_tr = (df_train[target_col] == 1).astype(int)
+        model = xgb.XGBClassifier(**params_no_es)
+        model.fit(df_train[feature_cols], y_tr, sample_weight=sw_tr, verbose=False)
         raw_probs = model.predict_proba(latest_df[feature_cols])[:, 1]
         scores = calibrator.predict_proba(raw_probs) if calibrator else raw_probs
         signal_col = "prob_up"
     else:
+        model = xgb.XGBRegressor(**params_no_es)
+        model.fit(df_train[feature_cols], df_train[target_col],
+                  sample_weight=sw_tr, verbose=False)
         scores = model.predict(latest_df[feature_cols])
         signal_col = "pred_return"
 
     out = latest_df[["ticker"]].copy()
     out[signal_col] = scores
-    out["signal"] = np.where(scores > 0.5 if task == "classification" else scores > 0,
-                              "LONG", "NEUTRAL")
+    threshold = 0.5 if task == "classification" else 0.0
+    out["signal"] = np.where(scores > threshold, "LONG", "NEUTRAL")
     out = out.sort_values(signal_col, ascending=False).reset_index(drop=True)
     return out.head(top_n)
 
@@ -239,9 +261,13 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     df = add_labels(df, cfg.horizon, cfg.label_type)
     target_col = "target"
 
-    # Drop last h rows (no valid label) and rows with NaN label
+    # Keep df_full (features for ALL dates, including last horizon bars which have
+    # no valid label) so predict_latest can score the actual latest price date.
+    df_full = df.copy()
+
+    # Drop last h rows (no valid label) from the training frame
     df = df.dropna(subset=[target_col]).reset_index(drop=True)
-    print(f"  {len(df):,} rows with valid labels")
+    print(f"  {len(df):,} rows with valid labels  |  latest inference date: {df_full['date'].max().date()}")
 
     # Sample weights
     print("\n[Phase 2c] Computing sample weights …")
@@ -280,21 +306,33 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     calibrator = None
     if task == "classification":
-        cal_idx = test_idx_final[:len(test_idx_final) // 2]
-        oos_idx = test_idx_final[len(test_idx_final) // 2:]
+        # Split the held-out test period into two halves:
+        #   first half  → fit the calibrator (time-ordered)
+        #   second half → measure ECE on truly unseen data
+        mid = len(test_idx_final) // 2
+        cal_idx = test_idx_final[:mid]
+        oos_idx = test_idx_final[mid:]
         df_cal = df.iloc[cal_idx]
+        df_oos = df.iloc[oos_idx]
         if len(df_cal) > 50:
             cal_model = fit_final_model(
                 df, feature_cols, target_col,
                 train_idx_final, cal_idx,
                 best_params, task, sw,
             )
-            raw_probs = cal_model.predict_proba(df_cal[feature_cols])[:, 1]
+            # Fit calibrator on first half
+            raw_probs_cal = cal_model.predict_proba(df_cal[feature_cols])[:, 1]
             cal_labels = (df_cal[target_col] == 1).astype(int).values
             calibrator = TimeOrderedCalibrator()
-            calibrator.fit(raw_probs, cal_labels)
-            ece = calibrator.calibration_error(raw_probs, cal_labels)
-            print(f"\n[calibration] ECE = {ece:.4f}")
+            calibrator.fit(raw_probs_cal, cal_labels)
+            # Measure ECE on second half (truly held-out)
+            if len(df_oos) > 10:
+                raw_probs_oos = cal_model.predict_proba(df_oos[feature_cols])[:, 1]
+                oos_labels = (df_oos[target_col] == 1).astype(int).values
+                ece = calibrator.calibration_error(raw_probs_oos, oos_labels)
+                print(f"\n[calibration] ECE on held-out OOS = {ece:.4f}")
+            else:
+                print(f"\n[calibration] fitted (OOS too small to measure ECE)")
         else:
             oos_idx = test_idx_final
     else:
@@ -340,7 +378,14 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     print("\n[Phase 5] Generating latest signals …")
     signals = predict_latest(
-        df, feature_cols, target_col, cfg, task, sw, best_params,
+        df_labeled=df,
+        df_full=df_full,
+        feature_cols=feature_cols,
+        target_col=target_col,
+        cfg=cfg,
+        task=task,
+        sw=sw,
+        best_params=best_params,
         calibrator=calibrator,
     )
     print("\n--- TOP SIGNALS (today) ---")

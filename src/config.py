@@ -33,6 +33,8 @@ class Config:
     xgb_n_trials: int = 50               # Optuna trials
     xgb_early_stopping: int = 50
     xgb_seed: int = 42
+    # "auto" → use GPU if one is visible (Colab), else CPU. Force with "cuda"/"cpu".
+    device: Literal["auto", "cuda", "cpu"] = "auto"
 
     # --- storage ---------------------------------------------------------
     data_dir: str = "data"

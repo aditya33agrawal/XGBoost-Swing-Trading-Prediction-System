@@ -25,31 +25,31 @@ def label_uniqueness_weights(
     have a forward window that overlaps with this one.  More overlap → lower
     uniqueness → lower weight.
 
+    Algorithm: O(h × n) vectorised, not O(n²).
+    Two label windows at positions i and j overlap iff |i-j| < h.
+    The overlap fraction is (h - |i-j|) / h.
+    We accumulate concurrency by sliding over offsets d = 1 … h-1.
+
     Returns a Series aligned to df.index.
     """
-    df = df.copy()
     weights = pd.Series(1.0, index=df.index)
 
     for ticker, grp in df.groupby("ticker"):
         grp = grp.sort_values("date").dropna(subset=[label_col])
-        dates = pd.to_datetime(grp["date"]).values
-        n = len(dates)
+        n = len(grp)
         if n == 0:
             continue
 
-        # Concurrency: for each sample i, count samples j whose window
-        # [j, j+h) overlaps [i, i+h)
+        # concurrency[i] = 1 + sum_{d=1}^{h-1} (h-d)/h for each valid neighbour
+        # at distance d in either direction.
         concurrency = np.ones(n)
-        for i in range(n):
-            start_i, end_i = i, i + h
-            for j in range(n):
-                start_j, end_j = j, j + h
-                overlap = min(end_i, end_j) - max(start_i, start_j)
-                if overlap > 0 and j != i:
-                    concurrency[i] += overlap / h
+        for d in range(1, h):
+            frac = (h - d) / h
+            concurrency[d:] += frac    # neighbours to the left  (i-d exists)
+            concurrency[:n - d] += frac  # neighbours to the right (i+d exists)
 
         uniqueness = 1.0 / concurrency
-        uniqueness = uniqueness / uniqueness.mean()  # normalise to mean=1
+        uniqueness = uniqueness / uniqueness.mean()
         weights.loc[grp.index] = uniqueness
 
     return weights.clip(lower=0.01)

@@ -22,6 +22,58 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Device selection (CPU vs GPU).  XGBoost 2.x uses tree_method="hist" + device.
+# ---------------------------------------------------------------------------
+_DEVICE = "cpu"
+
+
+def resolve_device(device: str = "auto") -> str:
+    """Resolve "auto" to "cuda" when a usable GPU is present, else "cpu"."""
+    if device != "auto":
+        return device
+    try:
+        import xgboost as xgb  # noqa: F401
+        # Cheapest reliable probe: ask CUDA how many devices it sees.
+        try:
+            from xgboost import collective  # noqa: F401
+        except Exception:
+            pass
+        import subprocess
+        out = subprocess.run(
+            ["nvidia-smi", "-L"], capture_output=True, text=True, timeout=5
+        )
+        if out.returncode == 0 and "GPU" in out.stdout:
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def set_device(device: str = "auto") -> str:
+    """Set the global device used for every XGBoost model built in this module."""
+    global _DEVICE
+    _DEVICE = resolve_device(device)
+    logger.info("XGBoost device set to '%s'", _DEVICE)
+    return _DEVICE
+
+
+def _with_device(params: dict) -> dict:
+    """Return a copy of params with tree_method/device set for the active device."""
+    p = dict(params)
+    p["tree_method"] = "hist"
+    p["device"] = _DEVICE
+    return p
+
+
+# Public aliases so other modules (e.g. the runner) can tag params + query device.
+apply_device = _with_device
+
+
+def get_device() -> str:
+    return _DEVICE
+
+
+# ---------------------------------------------------------------------------
 # XGBoost defaults (plan §8.2)
 # ---------------------------------------------------------------------------
 _BASE_PARAMS_CLF = {
@@ -91,6 +143,7 @@ def train_xgb(
         y_train_bin = y_train
         y_val_bin = y_val
 
+    params = _with_device(params)
     model = xgb.XGBClassifier(**params) if task == "classification" else xgb.XGBRegressor(**params)
     model.set_params(early_stopping_rounds=early_stopping)
     model.fit(
@@ -129,11 +182,11 @@ def _optuna_objective(
         "gamma": trial.suggest_float("gamma", 0.0, 5.0),
         "reg_lambda": trial.suggest_float("reg_lambda", 0.1, 10.0, log=True),
         "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 5.0),
-        "tree_method": "hist",
         "random_state": 42,
         "verbosity": 0,
         "early_stopping_rounds": 50,
     }
+    params = _with_device(params)
 
     fold_scores = []
     for train_idx, val_idx in splits:
@@ -188,22 +241,40 @@ def tune_hyperparameters(
         sampler=optuna.samplers.TPESampler(seed=42),
         pruner=optuna.pruners.MedianPruner(n_startup_trials=10),
     )
+
+    logger.info(
+        "Optuna search: %d trials | %d CV folds | device=%s",
+        n_trials, len(splits), _DEVICE,
+    )
+
+    def _log_trial(study_, trial):
+        # Log every trial's IC and the running best so progress is visible in Colab.
+        logger.info(
+            "  trial %3d/%d | IC=%+.4f | best=%+.4f",
+            trial.number + 1, n_trials,
+            trial.value if trial.value is not None else float("nan"),
+            study_.best_value,
+        )
+
     study.optimize(
         lambda t: _optuna_objective(t, X, y, splits, task, sample_weights),
         n_trials=n_trials,
-        show_progress_bar=True,
+        show_progress_bar=False,
         n_jobs=1,
+        callbacks=[_log_trial],
     )
 
     best = study.best_params
     best["objective"] = "binary:logistic" if task == "classification" else "reg:squarederror"
     best["eval_metric"] = "aucpr" if task == "classification" else "rmse"
     best["tree_method"] = "hist"
+    best["device"] = _DEVICE
     best["random_state"] = 42
     best["verbosity"] = 0
     best["early_stopping_rounds"] = 50
 
-    print(f"[tuning] best IC = {study.best_value:.4f} | params = {best}")
+    logger.info("Tuning done — best IC = %.4f", study.best_value)
+    logger.info("Best params: %s", best)
     return best
 
 
@@ -229,6 +300,7 @@ def fit_final_model(
     X_vl, y_vl = X.iloc[val_idx], y.iloc[val_idx]
     sw = sample_weights[train_idx] if sample_weights is not None else None
 
+    params = _with_device(params)
     if task == "classification":
         y_tr_b = (y_tr == 1).astype(int)
         y_vl_b = (y_vl == 1).astype(int)
