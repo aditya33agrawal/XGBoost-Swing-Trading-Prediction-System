@@ -62,6 +62,9 @@ def upsert_prices(df: pd.DataFrame, db_path: str) -> int:
     required = ["symbol", "date", "open", "high", "low", "close", "volume"]
     df = df[[c for c in required if c in df.columns]].copy()
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    # pandas 2.x may use the new 'str' StringDtype which older DuckDB can't scan;
+    # force plain object dtype so the dataframe SELECT works everywhere.
+    df["symbol"] = df["symbol"].astype(object)
 
     before = con.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
     con.execute("""
@@ -79,6 +82,7 @@ def upsert_index(df: pd.DataFrame, db_path: str) -> None:
     con = _get_con(db_path)
     df = df.rename(columns={"ticker": "symbol"})[["symbol", "date", "close"]].copy()
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    df["symbol"] = df["symbol"].astype(object)
     con.execute("""
         INSERT OR REPLACE INTO index_prices SELECT symbol, date, close FROM df
     """)

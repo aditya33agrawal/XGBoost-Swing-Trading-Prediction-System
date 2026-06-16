@@ -254,9 +254,10 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         n_new = upsert_prices(price_df, cfg.db_path)
         if not index_df.empty:
             upsert_index(index_df, cfg.db_path)
-        print(f"  {n_new} new rows upserted into DuckDB")
-    except ImportError as e:
-        print(f"  [storage] skipped — {e}")
+        logger.info("  %d new rows upserted into DuckDB", n_new)
+    except Exception as e:
+        # Persistence is best-effort — never let a storage hiccup kill training.
+        logger.warning("  [storage] skipped — %s: %s", type(e).__name__, e)
 
     # ------------------------------------------------------------------
     # Phase 1b: Validation gates
