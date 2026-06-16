@@ -119,7 +119,7 @@ def _walk_forward_predict(
                 task=task,
             )
         except Exception as e:
-            print(f"[runner] training failed at {rebal_date}: {e}")
+            logger.warning("training failed at %s: %s", rebal_date, e)
             continue
 
         if task == "classification":
@@ -131,6 +131,20 @@ def _walk_forward_predict(
         pred_df["pred"] = scores
         all_preds.append(pred_df)
 
+        # Periodic progress with a rough ETA so long runs aren't a black box.
+        if step % 10 == 0 or step == n_steps - 1:
+            elapsed = time.time() - t_wf
+            rate = elapsed / (step + 1)
+            eta = rate * (n_steps - step - 1)
+            logger.info(
+                "  step %3d/%d | %s | train=%d rows | best_iter=%s | ETA %.0fs",
+                step + 1, n_steps, pd.Timestamp(rebal_date).date(),
+                len(train_df),
+                getattr(model, "best_iteration", "n/a"),
+                eta,
+            )
+
+    logger.info("Walk-forward done in %.1fs", time.time() - t_wf)
     return pd.concat(all_preds, ignore_index=True) if all_preds else pd.DataFrame()
 
 
@@ -170,6 +184,7 @@ def predict_latest(
     # which is too small and causes the model to stop at round 0, collapsing all
     # predictions to the base rate.  We use the n_estimators chosen by Optuna instead.
     params_no_es = {k: v for k, v in best_params.items() if k != "early_stopping_rounds"}
+    params_no_es = apply_device(params_no_es)
 
     xgb = _get_xgb()
     sw_tr = sw[df_train.index] if sw is not None else None
@@ -211,9 +226,17 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     for d in [cfg.data_dir, cfg.raw_dir, cfg.model_dir]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
-    print("=" * 72)
-    print("NIFTY 50 SWING PREDICTION PIPELINE")
-    print("=" * 72)
+    logger.info("=" * 60)
+    logger.info("NIFTY 50 SWING PREDICTION PIPELINE")
+    logger.info("=" * 60)
+
+    # Resolve CPU vs GPU once and report it. Every XGBoost model built downstream
+    # picks this up via the trainer's module-level device.
+    dev = set_device(cfg.device)
+    logger.info(
+        "Config: %s..%s | horizon=%d | label=%s | trials=%d | device=%s",
+        cfg.start, cfg.end, cfg.horizon, cfg.label_type, cfg.xgb_n_trials, dev,
+    )
 
     # ------------------------------------------------------------------
     # Phase 1: Data ingestion
@@ -298,8 +321,9 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             sample_weights=sw_hpt,
         )
     else:
-        best_params = _BASE_PARAMS_CLF if task == "classification" else _BASE_PARAMS_REG
-        print("  skipping tuning — using default params")
+        base = _BASE_PARAMS_CLF if task == "classification" else _BASE_PARAMS_REG
+        best_params = apply_device(base)  # tag default params with the active device
+        logger.info("Skipping Optuna — using default params on device=%s", get_device())
 
     # ------------------------------------------------------------------
     # Phase 3b: Probability calibration on the final validation slice

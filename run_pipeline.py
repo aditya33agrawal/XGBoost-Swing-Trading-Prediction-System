@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config import Config
+from src.logging_setup import setup_logging
 from src.pipeline.runner import run
 
 
@@ -40,11 +41,19 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--trials", type=int, default=50, help="Optuna trials (0 = skip)")
     p.add_argument("--db", default="data/market.duckdb", help="DuckDB path")
+    p.add_argument(
+        "--device",
+        choices=["auto", "cuda", "cpu"],
+        default="auto",
+        help="XGBoost device. 'auto' uses the GPU if one is visible (Colab).",
+    )
+    p.add_argument("--log-level", default="INFO", help="DEBUG/INFO/WARNING")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    setup_logging(args.log_level)
     cfg = Config(
         start=args.start,
         end=args.end,
@@ -53,6 +62,7 @@ def main() -> None:
         mode=args.mode,
         xgb_n_trials=args.trials,
         db_path=args.db,
+        device=args.device,
         rebalance_every=args.horizon,  # rebalance at horizon frequency
         embargo=args.horizon,
     )
