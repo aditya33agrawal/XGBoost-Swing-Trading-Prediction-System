@@ -13,3 +13,7 @@ pydantic>=2.0
 pydantic-settings>=2.0
 mlflow>=2.12
 nsepython>=2.0
+supabase>=2.0
+streamlit>=1.35
+plotly>=5.0
+python-dotenv>=1.0

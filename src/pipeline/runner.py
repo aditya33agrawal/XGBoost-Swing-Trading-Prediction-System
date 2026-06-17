@@ -16,6 +16,7 @@ Usage:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -41,10 +42,57 @@ from src.models.calibration import TimeOrderedCalibrator
 from src.validation.walk_forward import PurgedWalkForward
 from src.validation.metrics import information_coefficient, directional_accuracy, summarise
 from src.backtest.engine import run_backtest, sensitivity_analysis
+from src.trading.signals import enrich_signals, save_signals, print_signal_table
+from src.trading.paper_trader import PaperPortfolio
+from src.db.supabase_client import get_supabase_client
+from src.tracking.prediction_journal import save_predictions, save_run_metadata, sync_paper_trades
+from src.models.improvement import get_model_version
 
 warnings.filterwarnings("ignore")
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+def _print_backtest_results(stats: dict) -> None:
+    skip = {"equity_curve", "period_returns", "error"}
+    w = 60
+    print(f"\n{'─' * w}")
+    print("  BACKTEST RESULTS")
+    print(f"{'─' * w}")
+    if "error" in stats:
+        print(f"  ERROR: {stats['error']}")
+    else:
+        labels = {
+            "label": "Strategy", "n_periods": "Periods",
+            "CAGR": "CAGR", "Sharpe": "Sharpe ratio",
+            "Sortino": "Sortino ratio", "Calmar": "Calmar ratio",
+            "max_drawdown": "Max drawdown", "hit_rate": "Hit rate",
+            "profit_factor": "Profit factor",
+            "avg_period_ret": "Avg period return", "final_equity": "Final equity (×)",
+        }
+        for k, label in labels.items():
+            if k in stats and k not in skip:
+                v = stats[k]
+                if isinstance(v, float):
+                    fmt = f"{v:>+.2%}" if k in ("CAGR", "max_drawdown", "avg_period_ret") else f"{v:>.3f}"
+                else:
+                    fmt = str(v)
+                print(f"  {label:<28}  {fmt}")
+    print(f"{'─' * w}")
+
+
+def _print_cost_sensitivity(sens: pd.DataFrame) -> None:
+    print(f"\n  COST SENSITIVITY")
+    print(f"  {'Mult':>6}  {'Sharpe':>8}  {'CAGR':>8}  {'MaxDD':>9}")
+    print(f"  {'─' * 36}")
+    for _, row in sens.iterrows():
+        print(
+            f"  {row['cost_mult']:>5.1f}×  {row['Sharpe']:>8.3f}  "
+            f"{row['CAGR']:>+7.2%}  {row['max_drawdown']:>+8.2%}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +242,11 @@ def predict_latest(
         model = xgb.XGBClassifier(**params_no_es)
         model.fit(df_train[feature_cols], y_tr, sample_weight=sw_tr, verbose=False)
         raw_probs = model.predict_proba(latest_df[feature_cols])[:, 1]
-        scores = calibrator.predict_proba(raw_probs) if calibrator else raw_probs
+        # Do NOT apply calibrator here.  The calibrator was fitted on a different
+        # model's output (trained on the HPT subset); applying it to a model trained
+        # on the full dataset maps all scores to near-constant values, collapsing
+        # the ranking.  Raw probabilities preserve cross-sectional ordering.
+        scores = raw_probs
         signal_col = "prob_up"
     else:
         model = xgb.XGBRegressor(**params_no_es)
@@ -229,6 +281,17 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     logger.info("=" * 60)
     logger.info("NIFTY 50 SWING PREDICTION PIPELINE")
     logger.info("=" * 60)
+
+    # Supabase client — shared across all phases; None = JSON-only mode
+    _sb = get_supabase_client(cfg.supabase_url, cfg.supabase_key)
+    if _sb:
+        logger.info("Supabase connected")
+    else:
+        logger.info("Supabase not configured — outputs written to %s/ only", cfg.output_dir)
+
+    # Auto-generate model version if not set
+    _run_id = cfg.model_version or get_model_version()
+    cfg.model_version = _run_id
 
     # Resolve CPU vs GPU once and report it. Every XGBoost model built downstream
     # picks this up via the trainer's module-level device.
@@ -268,6 +331,13 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     except DataQualityError as e:
         print(f"  ABORTED: {e}")
         raise
+
+    # Phase 1c: Resolve past predictions now that clean price data is available
+    if cfg.resolve_outcomes_on_start:
+        from src.tracking.outcome_tracker import resolve_outcomes
+        print("\n[Phase 1c] Resolving past predictions …")
+        n_resolved = resolve_outcomes(price_df, _sb, cfg.output_dir, cfg.horizon)
+        print(f"  {n_resolved} prediction(s) resolved")
 
     # ------------------------------------------------------------------
     # Phase 2: Features & labels
@@ -313,6 +383,8 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     cv_splits = splitter.split(df_hpt)
 
     print(f"\n[Phase 3] Hyperparameter search ({cfg.xgb_n_trials} Optuna trials) …")
+    # Try to load saved params when skipping Optuna (fast-signals mode)
+    _params_path = Path(cfg.params_path)
     if cfg.xgb_n_trials > 0 and len(cv_splits) >= 2:
         best_params = tune_hyperparameters(
             df_hpt, feature_cols, target_col,
@@ -321,9 +393,17 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             n_trials=cfg.xgb_n_trials,
             sample_weights=sw_hpt,
         )
+        # Persist so fast-signals runs can reuse them
+        _params_path.parent.mkdir(parents=True, exist_ok=True)
+        _params_path.write_text(json.dumps(best_params, indent=2))
+        logger.info("Best params saved → %s", _params_path)
+    elif _params_path.exists():
+        best_params = json.loads(_params_path.read_text())
+        best_params = apply_device(best_params)
+        logger.info("Loaded saved params from %s (device=%s)", _params_path, get_device())
     else:
         base = _BASE_PARAMS_CLF if task == "classification" else _BASE_PARAMS_REG
-        best_params = apply_device(base)  # tag default params with the active device
+        best_params = apply_device(base)
         logger.info("Skipping Optuna — using default params on device=%s", get_device())
 
     # ------------------------------------------------------------------
@@ -366,37 +446,31 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     # Phase 4: Walk-forward OOF predictions + backtest
     # ------------------------------------------------------------------
-    print("\n[Phase 4] Walk-forward prediction loop …")
-    oof_preds = _walk_forward_predict(df, feature_cols, target_col, cfg, task, sw, best_params)
-    print(f"  generated predictions for {oof_preds['date'].nunique() if not oof_preds.empty else 0} dates")
+    stats: dict = {}
+    oof_preds: pd.DataFrame = pd.DataFrame()
 
-    if not oof_preds.empty:
-        ic = information_coefficient(
-            oof_preds["pred"].values, oof_preds["fwd_ret"].values
-        )
-        da = directional_accuracy(
-            oof_preds["pred"].values, oof_preds["fwd_ret"].values
-        )
-        print(f"  OOF Information Coefficient = {ic:.4f}")
-        print(f"  OOF Directional Accuracy    = {da:.4f}")
+    if cfg.skip_backtest:
+        print("\n[Phase 4] Walk-forward skipped (--fast-signals mode)")
+    else:
+        print("\n[Phase 4] Walk-forward prediction loop …")
+        oof_preds = _walk_forward_predict(df, feature_cols, target_col, cfg, task, sw, best_params)
+        n_dates = oof_preds["date"].nunique() if not oof_preds.empty else 0
+        print(f"  generated predictions for {n_dates} dates")
 
-    # ------------------------------------------------------------------
-    # Phase 4b: Cost-adjusted backtest
-    # ------------------------------------------------------------------
-    print("\n[Phase 4b] Backtest with Indian transaction costs …")
-    stats = run_backtest(oof_preds, cfg)
+        if not oof_preds.empty:
+            ic = information_coefficient(oof_preds["pred"].values, oof_preds["fwd_ret"].values)
+            da = directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values)
+            print(f"  OOF Information Coefficient = {ic:.4f}")
+            print(f"  OOF Directional Accuracy    = {da:.4f}")
 
-    print("\n--- BACKTEST RESULTS ---")
-    for k, v in stats.items():
-        if k in ("equity_curve", "period_returns"):
-            continue
-        print(f"  {k:>16}: {v}")
+        # Phase 4b: Cost-adjusted backtest
+        print("\n[Phase 4b] Backtest with Indian transaction costs …")
+        stats = run_backtest(oof_preds, cfg)
+        _print_backtest_results(stats)
 
-    # Sensitivity to costs
-    if not oof_preds.empty:
-        sens = sensitivity_analysis(oof_preds, cfg)
-        print("\n--- COST SENSITIVITY ---")
-        print(sens.to_string(index=False))
+        if not oof_preds.empty:
+            sens = sensitivity_analysis(oof_preds, cfg)
+            _print_cost_sensitivity(sens)
 
     # ------------------------------------------------------------------
     # Phase 5: Latest signals
@@ -413,14 +487,65 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         best_params=best_params,
         calibrator=calibrator,
     )
-    print("\n--- TOP SIGNALS (today) ---")
-    print(signals.to_string(index=False) if not signals.empty else "  (no signals)")
+
+    # Phase 5b: Enrich with ATR-based entry / stop / target levels
+    if not signals.empty:
+        signals = enrich_signals(signals, price_df, cfg)
+
+    # Phase 5c: Persist signals to disk
+    if cfg.save_outputs and not signals.empty:
+        json_path = save_signals(signals, cfg.output_dir)
+        print(f"  Signals saved → {json_path}")
+
+    # Phase 5d: Formatted signal table
+    print_signal_table(signals, title="TOP SIGNALS (today)")
+
+    # Phase 5e: Persist predictions + run metadata to Supabase / JSON
+    if cfg.save_to_supabase and not signals.empty:
+        save_predictions(signals, _run_id, cfg.model_version, _sb, cfg.output_dir)
+        # Enrich stats_dict with OOF metrics so they appear in model_runs
+        _stats_enriched = dict(stats)
+        _stats_enriched["horizon_days"] = cfg.horizon
+        _stats_enriched["label_type"]   = cfg.label_type
+        save_run_metadata(
+            _stats_enriched, _run_id, cfg.model_version,
+            best_params, None, _sb, cfg.output_dir,
+        )
+
+    # ------------------------------------------------------------------
+    # Phase 6: Paper trading
+    # ------------------------------------------------------------------
+    if cfg.paper_trade:
+        print("\n[Phase 6] Paper trading update …")
+        portfolio = PaperPortfolio.load(cfg.portfolio_path)
+        portfolio.max_positions     = cfg.max_positions
+        portfolio.position_size_pct = cfg.position_size_pct
+        if portfolio.initial_capital == 1_000_000 and cfg.initial_capital != 1_000_000:
+            portfolio.initial_capital = cfg.initial_capital
+
+        closed = portfolio.update(price_df)
+        if closed:
+            print(f"  Closed {len(closed)} position(s)")
+
+        opened = portfolio.add_signals(signals, price_df, cfg)
+        if opened:
+            print(f"  Opened {len(opened)} new position(s): {[t.ticker for t in opened]}")
+
+        portfolio.print_summary(price_df)
+        portfolio.save(cfg.portfolio_path)
+
+        # Sync all trades to Supabase paper_trades table
+        if cfg.save_to_supabase:
+            n_synced = sync_paper_trades(portfolio, _run_id, _sb)
+            if n_synced:
+                logger.info("Synced %d paper trades to Supabase", n_synced)
 
     print("\n" + "=" * 72)
     print("Pipeline complete.")
-    print(
-        "NOTE: On synthetic/low-signal data, near-zero Sharpe after costs is "
-        "the correct result.  Real edge, if it exists, is small (52–56% accuracy)."
-    )
+    if not cfg.skip_backtest:
+        print(
+            "NOTE: On synthetic/low-signal data, near-zero Sharpe after costs is "
+            "the correct result.  Real edge, if it exists, is small (52–56% accuracy)."
+        )
     print("=" * 72)
     return stats, signals
