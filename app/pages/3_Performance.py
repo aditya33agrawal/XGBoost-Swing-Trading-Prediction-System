@@ -1,4 +1,8 @@
 """Page 3: Prediction Performance — IC, accuracy, hit rates."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import math
 import streamlit as st
 import pandas as pd

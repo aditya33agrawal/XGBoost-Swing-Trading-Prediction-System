@@ -1,4 +1,8 @@
 """Page 1: Today's Signals."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import streamlit as st
 import pandas as pd
 from app.utils.data_loader import load_signals, refresh_all

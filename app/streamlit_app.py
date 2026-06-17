@@ -1,4 +1,8 @@
 """Main Streamlit entry point — session state, sidebar, global styles."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import os
 import streamlit as st
 

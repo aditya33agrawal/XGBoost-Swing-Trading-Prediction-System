@@ -1,4 +1,8 @@
 """Page 5: Settings — manual position management, triggers, config display."""
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 import os
 import json
 from datetime import date, datetime
