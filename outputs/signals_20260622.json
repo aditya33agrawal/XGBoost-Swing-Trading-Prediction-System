@@ -1,0 +1,127 @@
+{
+  "generated_at": "2026-06-22T00:18:45.826966",
+  "signal_count": 10,
+  "long_count": 10,
+  "signals": [
+    {
+      "ticker": "HINDALCO.NS",
+      "prob_up": 0.33457687497138977,
+      "signal": "LONG",
+      "atr14": 18.53,
+      "entry_price": 884.15,
+      "stop_loss": 847.08,
+      "target_price": 921.22,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "TMPV.NS",
+      "prob_up": 0.33275124430656433,
+      "signal": "LONG",
+      "atr14": 6.56,
+      "entry_price": 358.77,
+      "stop_loss": 345.65,
+      "target_price": 371.9,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "ADANIENT.NS",
+      "prob_up": 0.3113192021846771,
+      "signal": "LONG",
+      "atr14": 40.25,
+      "entry_price": 2213.71,
+      "stop_loss": 2133.21,
+      "target_price": 2294.21,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "WIPRO.NS",
+      "prob_up": 0.2971077561378479,
+      "signal": "LONG",
+      "atr14": 3.56,
+      "entry_price": 257.01,
+      "stop_loss": 249.89,
+      "target_price": 264.14,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "COALINDIA.NS",
+      "prob_up": 0.28140386939048767,
+      "signal": "LONG",
+      "atr14": 6.47,
+      "entry_price": 392.81,
+      "stop_loss": 379.86,
+      "target_price": 405.75,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "ULTRACEMCO.NS",
+      "prob_up": 0.2766234874725342,
+      "signal": "LONG",
+      "atr14": 144.59,
+      "entry_price": 11705.0,
+      "stop_loss": 11415.82,
+      "target_price": 11994.18,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "ICICIBANK.NS",
+      "prob_up": 0.26661133766174316,
+      "signal": "LONG",
+      "atr14": 14.0,
+      "entry_price": 1342.5,
+      "stop_loss": 1314.5,
+      "target_price": 1370.5,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "APOLLOHOSP.NS",
+      "prob_up": 0.26332005858421326,
+      "signal": "LONG",
+      "atr14": 113.09,
+      "entry_price": 6980.73,
+      "stop_loss": 6754.56,
+      "target_price": 7206.91,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "CIPLA.NS",
+      "prob_up": 0.2541970908641815,
+      "signal": "LONG",
+      "atr14": 19.42,
+      "entry_price": 1478.63,
+      "stop_loss": 1439.78,
+      "target_price": 1517.48,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    },
+    {
+      "ticker": "HINDUNILVR.NS",
+      "prob_up": 0.24820777773857117,
+      "signal": "LONG",
+      "atr14": 26.63,
+      "entry_price": 2290.2,
+      "stop_loss": 2236.93,
+      "target_price": 2343.47,
+      "risk_reward": 1.0,
+      "horizon_days": 5,
+      "signal_date": "2025-12-30"
+    }
+  ]
+}
