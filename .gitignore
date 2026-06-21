@@ -11,5 +11,5 @@ venv/
 .pytest_cache/
 
 # Generated model/registry artifacts — live in Drive/GCS, not git (plan §14)
-registry/
-reports/
+/registry/
+/reports/
