@@ -8,3 +8,8 @@ __pycache__/
 venv/
 .venv_app/
 .ipynb_checkpoints/
+.pytest_cache/
+
+# Generated model/registry artifacts — live in Drive/GCS, not git (plan §14)
+registry/
+reports/

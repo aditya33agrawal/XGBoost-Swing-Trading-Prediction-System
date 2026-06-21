@@ -1,0 +1,16 @@
+{
+  "_note": "Last-known-good XGBoost params. The weekly job reuses these; re-run Optuna monthly to refresh (bot-implementaion-plan §5.2). Starting grid is the regularized, shallow-tree config from swing-bot-plan §8.2 — deep trees memorize financial noise.",
+  "objective": "binary:logistic",
+  "eval_metric": "aucpr",
+  "tree_method": "hist",
+  "n_estimators": 400,
+  "learning_rate": 0.02,
+  "max_depth": 4,
+  "min_child_weight": 5,
+  "subsample": 0.8,
+  "colsample_bytree": 0.7,
+  "gamma": 0.5,
+  "reg_lambda": 2.0,
+  "reg_alpha": 0.5,
+  "early_stopping_rounds": 50
+}

@@ -47,6 +47,11 @@ from src.trading.paper_trader import PaperPortfolio
 from src.db.supabase_client import get_supabase_client
 from src.tracking.prediction_journal import save_predictions, save_run_metadata, sync_paper_trades
 from src.models.improvement import get_model_version
+from src.registry.bundle import save_bundle, prune_old_bundles
+from src.monitoring.drift import (
+    feature_drift_report, concept_drift_from_outcomes,
+    calibration_drift, build_drift_report, write_drift_report,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -143,8 +148,14 @@ def _walk_forward_predict(
         if len(train_df) < cfg.train_min_days or test_df.empty:
             continue
 
-        # Use a small recent slice as early-stopping validation
-        val_cutoff = dates[max(0, i - cfg.embargo - cfg.horizon - 21)]
+        # Early-stopping validation window.  The old 21-day slice gave early
+        # stopping almost no signal: with the low learning rates Optuna favours
+        # (~0.007) AUCPR never improved within `patience` rounds on such a noisy
+        # window, so best_iteration collapsed to 0 and every 2017–2020 fold was
+        # dropped below (~160 / 441 walk-forward steps wasted).  A ~3-month
+        # window (cfg.wf_es_val_days) gives a stable early-stop signal and
+        # recovers those early folds.
+        val_cutoff = dates[max(0, i - cfg.embargo - cfg.horizon - cfg.wf_es_val_days)]
         val_mask = (df["date"] > val_cutoff) & (df["date"] <= cutoff_date)
         val_df = df[val_mask].dropna(subset=feature_cols + [target_col])
         if val_df.empty:
@@ -170,12 +181,25 @@ def _walk_forward_predict(
             logger.warning("training failed at %s: %s", rebal_date, e)
             continue
 
+        # Early stopping can land on best_iteration == 0 when the training
+        # window is too sparse (notably the early 2017–2020 folds).  A 0-tree
+        # model predicts a constant base rate: zero cross-sectional dispersion,
+        # which adds pure noise to OOF IC and feeds random quintiles into the
+        # backtest.  Drop those degenerate folds rather than poison the metrics.
+        best_iter = getattr(model, "best_iteration", None)
+        if best_iter is not None and best_iter == 0:
+            logger.warning("skipping fold %s — best_iteration=0 (sparse train, no signal)", rebal_date)
+            continue
+
         if task == "classification":
             scores = model.predict_proba(X_te)[:, 1]
         else:
             scores = model.predict(X_te)
 
-        pred_df = test_df[["date", "ticker", "fwd_ret"]].copy()
+        pred_cols = ["date", "ticker", "fwd_ret"]
+        if cfg.regime_sma_col in test_df.columns:
+            pred_cols.append(cfg.regime_sma_col)
+        pred_df = test_df[pred_cols].copy()
         pred_df["pred"] = scores
         all_preds.append(pred_df)
 
@@ -210,7 +234,8 @@ def predict_latest(
     best_params: dict,
     calibrator: TimeOrderedCalibrator | None = None,
     top_n: int = 10,
-) -> pd.DataFrame:
+    return_model: bool = False,
+):
     """Retrain on all labeled data and score the actual latest price date.
 
     The distinction between df_labeled and df_full matters:
@@ -225,7 +250,8 @@ def predict_latest(
     latest_df = df_full[df_full["date"] == latest_date].dropna(subset=feature_cols)
 
     if df_train.empty or latest_df.empty:
-        return pd.DataFrame(columns=["ticker", "score", "signal"])
+        empty = pd.DataFrame(columns=["ticker", "score", "signal"])
+        return (empty, None) if return_model else empty
 
     # For the final production model we use a fixed n_estimators (no early stopping).
     # Early stopping requires a held-out val set; the val window here is only ~21 days
@@ -257,10 +283,29 @@ def predict_latest(
 
     out = latest_df[["ticker"]].copy()
     out[signal_col] = scores
-    threshold = 0.5 if task == "classification" else 0.0
-    out["signal"] = np.where(scores > threshold, "LONG", "NEUTRAL")
     out = out.sort_values(signal_col, ascending=False).reset_index(drop=True)
-    return out.head(top_n)
+
+    # Selection MUST mirror the backtest engine, which longs the top
+    # cross-sectional quantile by score (engine.py: q == n_quantile-1) — NOT an
+    # absolute threshold.  With the triple-barrier 'up' base rate ~0.23,
+    # calibrated probabilities almost never exceed 0.5, so an absolute
+    # prob>0.5 cutoff emits ZERO long signals every day and the live layer
+    # never trades the strategy that was actually validated.
+    n = len(out)
+    n_long = max(1, n // cfg.n_quantile) if n else 0
+    out["signal"] = "NEUTRAL"
+    if n_long:
+        out.iloc[:n_long, out.columns.get_loc("signal")] = "LONG"
+
+    # Risk overlay (mirror the backtest): if the index is below its long SMA
+    # today, suppress all LONGs and stay flat regardless of model scores.
+    if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
+        regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
+        if regime_val < 0:
+            out["signal"] = "NEUTRAL"
+
+    result = out.head(top_n)
+    return (result, model) if return_model else result
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +455,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # Phase 3b: Probability calibration on the final validation slice
     # ------------------------------------------------------------------
     calibrator = None
+    _oos_ece = float("nan")          # held-out calibration error (for promotion gate / bundle)
     if task == "classification":
         # Split the held-out test period into two halves:
         #   first half  → fit the calibrator (time-ordered)
@@ -435,6 +481,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
                 raw_probs_oos = cal_model.predict_proba(df_oos[feature_cols])[:, 1]
                 oos_labels = (df_oos[target_col] == 1).astype(int).values
                 ece = calibrator.calibration_error(raw_probs_oos, oos_labels)
+                _oos_ece = float(ece)
                 print(f"\n[calibration] ECE on held-out OOS = {ece:.4f}")
             else:
                 print(f"\n[calibration] fitted (OOS too small to measure ECE)")
@@ -457,15 +504,19 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         n_dates = oof_preds["date"].nunique() if not oof_preds.empty else 0
         print(f"  generated predictions for {n_dates} dates")
 
+        oof_ic = oof_dir_acc = None
         if not oof_preds.empty:
-            ic = information_coefficient(oof_preds["pred"].values, oof_preds["fwd_ret"].values)
-            da = directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values)
-            print(f"  OOF Information Coefficient = {ic:.4f}")
-            print(f"  OOF Directional Accuracy    = {da:.4f}")
+            oof_ic = float(information_coefficient(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
+            oof_dir_acc = float(directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
+            print(f"  OOF Information Coefficient = {oof_ic:.4f}")
+            print(f"  OOF Directional Accuracy    = {oof_dir_acc:.4f}")
 
         # Phase 4b: Cost-adjusted backtest
         print("\n[Phase 4b] Backtest with Indian transaction costs …")
-        stats = run_backtest(oof_preds, cfg)
+        stats = run_backtest(oof_preds, cfg)   # returns a fresh dict
+        if oof_ic is not None:
+            stats["oof_ic"] = oof_ic
+            stats["oof_dir_acc"] = oof_dir_acc
         _print_backtest_results(stats)
 
         if not oof_preds.empty:
@@ -476,7 +527,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # Phase 5: Latest signals
     # ------------------------------------------------------------------
     print("\n[Phase 5] Generating latest signals …")
-    signals = predict_latest(
+    signals, final_model = predict_latest(
         df_labeled=df,
         df_full=df_full,
         feature_cols=feature_cols,
@@ -486,6 +537,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         sw=sw,
         best_params=best_params,
         calibrator=calibrator,
+        return_model=True,
     )
 
     # Phase 5b: Enrich with ATR-based entry / stop / target levels
@@ -500,17 +552,101 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # Phase 5d: Formatted signal table
     print_signal_table(signals, title="TOP SIGNALS (today)")
 
-    # Phase 5e: Persist predictions + run metadata to Supabase / JSON
+    # Phase 5e: Persist run metadata + predictions to Supabase / JSON.
+    # ORDER MATTERS: model_runs MUST be written before predictions, because
+    # predictions.run_id is a FOREIGN KEY → model_runs.run_id.  Writing the
+    # predictions first raises a 23503 FK violation (the parent run row does
+    # not exist yet) and the day's signals are silently dropped from the DB.
     if cfg.save_to_supabase and not signals.empty:
-        save_predictions(signals, _run_id, cfg.model_version, _sb, cfg.output_dir)
         # Enrich stats_dict with OOF metrics so they appear in model_runs
         _stats_enriched = dict(stats)
         _stats_enriched["horizon_days"] = cfg.horizon
         _stats_enriched["label_type"]   = cfg.label_type
+
+        # Feature importances from the production model → model_runs / feature_importance
+        _feat_imp = None
+        try:
+            _imp = getattr(final_model, "feature_importances_", None)
+            if _imp is not None:
+                _feat_imp = {f: float(v) for f, v in zip(feature_cols, _imp)}
+        except Exception:
+            _feat_imp = None
+
         save_run_metadata(
             _stats_enriched, _run_id, cfg.model_version,
-            best_params, None, _sb, cfg.output_dir,
+            best_params, _feat_imp, _sb, cfg.output_dir,
         )
+        save_predictions(signals, _run_id, cfg.model_version, _sb, cfg.output_dir)
+
+    # ------------------------------------------------------------------
+    # Phase 5f: Persist a reproducible model bundle to the registry (§7)
+    # ------------------------------------------------------------------
+    # Persist the bundle whenever we have a trained production model — even on a
+    # day where the regime overlay suppresses every LONG (all-NEUTRAL signals).
+    # The reproducible artifact (booster + manifest + metrics) is what the daily
+    # VM loop loads; it must not depend on whether today happened to trade.
+    if cfg.save_bundle and final_model is not None:
+        try:
+            bundle_metrics = {
+                "oof_ic":       stats.get("oof_ic"),
+                "oof_dir_acc":  stats.get("oof_dir_acc"),
+                "sharpe_net":   stats.get("Sharpe"),
+                "sortino":      stats.get("Sortino"),
+                "calmar":       stats.get("Calmar"),
+                "max_drawdown": stats.get("max_drawdown"),
+                "hit_rate":     stats.get("hit_rate"),
+                "calib_err":    None if (_oos_ece != _oos_ece) else _oos_ece,
+            }
+            bundle_dir = save_bundle(
+                cfg.registry_root,
+                model=final_model,
+                calibrator=calibrator,
+                features=feature_cols,
+                hyperparams=best_params,
+                metrics=bundle_metrics,
+                train_window={"start": cfg.start, "end": cfg.end},
+                horizon_days=cfg.horizon,
+                embargo_days=cfg.embargo,
+                model_version=_run_id,
+                label_type=cfg.label_type,
+                task=task,
+            )
+            print(f"  Model bundle saved → {bundle_dir}")
+            prune_old_bundles(cfg.registry_root, keep=cfg.keep_bundles)
+        except Exception as exc:
+            logger.warning("Bundle save failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 5g: Drift report — feature (PSI/KS), concept (ledger), calibration (§9)
+    # ------------------------------------------------------------------
+    if not cfg.skip_backtest:
+        try:
+            df_feat = df.dropna(subset=feature_cols)
+            n = len(df_feat)
+            drift_fd = pd.DataFrame()
+            if n > 200:
+                ref = df_feat.iloc[: n // 2]           # older half = training reference
+                cur = df_feat.iloc[n // 2 :]           # recent half = current regime
+                drift_fd = feature_drift_report(ref, cur, feature_cols)
+
+            outcomes_df = pd.DataFrame()
+            try:
+                from src.tracking.outcome_tracker import _load_outcomes_df
+                outcomes_df = _load_outcomes_df(_sb, n_weeks=12, fallback_dir=cfg.output_dir)
+            except Exception:
+                pass
+
+            report = build_drift_report(
+                feature_drift=drift_fd,
+                concept=concept_drift_from_outcomes(outcomes_df, backtest_ic=stats.get("oof_ic")),
+                calibration=calibration_drift(outcomes_df),
+                extra={"model_version": _run_id},
+            )
+            _, html_path = write_drift_report(report, cfg.reports_dir, tag=_run_id)
+            print(f"  Drift report → {html_path}"
+                  f"{'  [RETRAIN RECOMMENDED]' if report['retrain_recommended'] else ''}")
+        except Exception as exc:
+            logger.warning("Drift report failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
     # Phase 6: Paper trading

@@ -30,15 +30,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def _get_secret(key: str, default: str = "") -> str:
+    try:
+        return st.secrets.get(key, os.getenv(key, default))
+    except Exception:
+        return os.getenv(key, default)
+
 # ── Session-state defaults ─────────────────────────────────────────────────────
 if "supabase_url" not in st.session_state:
-    st.session_state["supabase_url"] = st.secrets.get(
-        "SUPABASE_URL", os.getenv("SUPABASE_URL", "")
-    )
+    st.session_state["supabase_url"] = _get_secret("SUPABASE_URL")
 if "supabase_key" not in st.session_state:
-    st.session_state["supabase_key"] = st.secrets.get(
-        "SUPABASE_KEY", os.getenv("SUPABASE_KEY", "")
-    )
+    st.session_state["supabase_key"] = _get_secret("SUPABASE_KEY")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:

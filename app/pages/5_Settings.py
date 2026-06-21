@@ -163,8 +163,12 @@ def _mask(val: str) -> str:
         return "— (not set)"
     return val[:8] + "…" + val[-4:] if len(val) > 12 else "****"
 
-supabase_url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
-supabase_key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
+try:
+    supabase_url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
+    supabase_key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
+except Exception:
+    supabase_url = os.getenv("SUPABASE_URL", "")
+    supabase_key = os.getenv("SUPABASE_KEY", "")
 
 col1, col2 = st.columns(2)
 with col1:

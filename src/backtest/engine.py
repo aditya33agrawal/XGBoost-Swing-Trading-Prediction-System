@@ -46,10 +46,25 @@ def run_backtest(
     prev_short: set[str] = set()
     dates_traded: list[pd.Timestamp] = []
 
+    regime_col = getattr(cfg, "regime_sma_col", "nifty_dist_sma200")
+    use_regime = getattr(cfg, "regime_filter", False) and regime_col in preds.columns
+
     for date, day in preds.groupby("date"):
         day = day.dropna(subset=["pred", "fwd_ret"])
         if len(day) < cfg.n_quantile * 2:
             continue
+
+        # Risk overlay: if the index is below its long SMA on this rebalance
+        # date, go flat — hold no longs.  Prior book is closed (turnover cost
+        # applies once), then we sit in cash until the regime turns back on.
+        if use_regime:
+            regime_val = float(day[regime_col].iloc[0])
+            if regime_val < 0:
+                turn_long = 1.0 if prev_long else 0.0
+                period_rets.append(-rt_cost * turn_long)
+                dates_traded.append(date)
+                prev_long, prev_short = set(), set()
+                continue
 
         # Rank-based quintile assignment
         day = day.copy()

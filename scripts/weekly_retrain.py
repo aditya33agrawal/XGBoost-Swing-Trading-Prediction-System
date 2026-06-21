@@ -44,6 +44,8 @@ from src.models.improvement import (
     should_retrain,
 )
 from src.pipeline.runner import run
+from src.registry.bundle import set_prod_pointer
+from src.registry.promotion import evaluate_promotion
 from src.tracking.outcome_tracker import compute_recent_ic, compute_weekly_ic_series, resolve_outcomes
 
 logger = logging.getLogger(__name__)
@@ -156,21 +158,48 @@ def main() -> None:
                 new_sharpe if not math.isnan(new_sharpe) else 0,
                 (new_cagr or 0) * 100)
 
-    # ---- Step 3: Compare and deploy -------------------------------------
-    logger.info("\n[Step 3] Model comparison …")
+    # ---- Step 3: Champion/challenger gate (§8) --------------------------
+    logger.info("\n[Step 3] Champion/challenger gate …")
+
+    # Was a drift alarm raised by this run's drift report?
+    drift_alarm = False
+    try:
+        drift_path = Path(train_cfg.reports_dir) / f"drift_{new_run_id}.json"
+        if drift_path.exists():
+            import json as _json
+            drift_alarm = bool(_json.loads(drift_path.read_text()).get("retrain_recommended"))
+    except Exception:
+        pass
+
     if args.force_deploy:
         should_deploy = True
+        decision = {"promote": True, "reasons": ["--force-deploy"]}
         logger.info("  --force-deploy flag set — deploying unconditionally")
     else:
-        should_deploy = compare_models(new_oof_ic, current_ic)
+        decision = evaluate_promotion(
+            challenger={"sharpe_net": new_sharpe, "ic": new_oof_ic,
+                        "calib_err": new_stats.get("calib_err")},
+            champion=None if math.isnan(current_ic) else {"ic": current_ic},
+            drift_alarm=drift_alarm,
+        )
+        should_deploy = decision["promote"]
+        logger.info("  Decision: %s — %s",
+                    "PROMOTE" if should_deploy else "KEEP CHAMPION",
+                    "; ".join(decision["reasons"]))
 
     if should_deploy and not args.skip_deploy:
         mark_deployed(new_run_id, sb, base_cfg.output_dir, previous_run_id=current_run_id)
+        # Flip the registry prod pointer to the freshly-saved bundle (atomic, rollback-safe)
+        new_bundle = Path(train_cfg.registry_root) / "registry" / "bundles" / f"model_{new_run_id}"
+        if new_bundle.exists():
+            set_prod_pointer(train_cfg.registry_root, str(new_bundle))
         logger.info("  Deployed: %s (replaces %s)", new_run_id, current_run_id or "none")
 
         # Sync to Google Drive if running on Colab
-        _sync_to_drive("models",  args.drive_dir, "models")
-        _sync_to_drive("outputs", args.drive_dir, "outputs")
+        _sync_to_drive("models",   args.drive_dir, "models")
+        _sync_to_drive("outputs",  args.drive_dir, "outputs")
+        _sync_to_drive("registry", args.drive_dir, "registry")
+        _sync_to_drive("reports",  args.drive_dir, "reports")
     else:
         reason = "--skip-deploy flag" if args.skip_deploy else "IC did not improve sufficiently"
         logger.info("  Not deploying: %s", reason)

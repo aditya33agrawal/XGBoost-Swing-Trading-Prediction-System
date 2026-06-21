@@ -30,10 +30,21 @@ _OUTPUTS = Path(os.getenv("OUTPUTS_DIR", "outputs"))
 def _get_client():
     try:
         url = st.secrets.get("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "") or os.getenv("SUPABASE_KEY", "")
+        key = (
+            st.secrets.get("SUPABASE_KEY", "")
+            or st.secrets.get("SUPABASE_PUBLISHABLE_KEY", "")
+            or st.secrets.get("SUPABASE_SECRET_KEY", "")
+            or os.getenv("SUPABASE_KEY", "")
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+            or os.getenv("SUPABASE_SECRET_KEY", "")
+        )
     except Exception:
         url = os.getenv("SUPABASE_URL", "")
-        key = os.getenv("SUPABASE_KEY", "")
+        key = (
+            os.getenv("SUPABASE_KEY", "")
+            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
+            or os.getenv("SUPABASE_SECRET_KEY", "")
+        )
     if not url or not key:
         return None
     try:
