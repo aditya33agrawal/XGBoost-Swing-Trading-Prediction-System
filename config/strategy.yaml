@@ -35,6 +35,8 @@ risk:
   position_size_pct: 0.05  # 5% of portfolio per name
   initial_capital: 1000000 # INR
   regime_filter: true      # go flat when Nifty < 200-day SMA (caps drawdown)
+  signal_stop_atr_mult: 1.5    # paper/live stop  = entry - 1.5*ATR
+  signal_target_atr_mult: 3.0  # paper/live target = entry + 3.0*ATR (RR≈2:1)
 
 # --- promotion gate (bot-implementaion-plan §8) ---
 promotion:

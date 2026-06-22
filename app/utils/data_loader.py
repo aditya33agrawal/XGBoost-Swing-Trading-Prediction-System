@@ -19,6 +19,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from app.utils.env import get_supabase_url, get_supabase_key
+
 # Output directory (relative to repo root; Streamlit Cloud uses CWD)
 _OUTPUTS = Path(os.getenv("OUTPUTS_DIR", "outputs"))
 
@@ -28,23 +30,8 @@ _OUTPUTS = Path(os.getenv("OUTPUTS_DIR", "outputs"))
 # ---------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
 def _get_client():
-    try:
-        url = st.secrets.get("SUPABASE_URL", "") or os.getenv("SUPABASE_URL", "")
-        key = (
-            st.secrets.get("SUPABASE_KEY", "")
-            or st.secrets.get("SUPABASE_PUBLISHABLE_KEY", "")
-            or st.secrets.get("SUPABASE_SECRET_KEY", "")
-            or os.getenv("SUPABASE_KEY", "")
-            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-            or os.getenv("SUPABASE_SECRET_KEY", "")
-        )
-    except Exception:
-        url = os.getenv("SUPABASE_URL", "")
-        key = (
-            os.getenv("SUPABASE_KEY", "")
-            or os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
-            or os.getenv("SUPABASE_SECRET_KEY", "")
-        )
+    url = get_supabase_url()
+    key = get_supabase_key()
     if not url or not key:
         return None
     try:
@@ -234,6 +221,100 @@ def load_outcomes(n_weeks: int = 12) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 7. Account ledger (funds statement)
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=60, show_spinner=False)
+def load_account_ledger() -> pd.DataFrame:
+    """Full funds-ledger statement (Supabase account_ledger, JSON fallback)."""
+    rows = _fetch("account_ledger", order_by="-ts")
+    if rows:
+        return pd.DataFrame(rows)
+
+    pf = _OUTPUTS / "portfolio.json"
+    if pf.exists():
+        try:
+            data = json.loads(pf.read_text())
+            ledger = data.get("ledger", [])
+            if ledger:
+                return pd.DataFrame(ledger).sort_values("ts", ascending=False).reset_index(drop=True)
+        except Exception:
+            pass
+    return pd.DataFrame(columns=["id", "ts", "type", "trade_id", "ticker",
+                                  "qty", "price", "amount", "running_balance", "note"])
+
+
+# ---------------------------------------------------------------------------
+# 8. Prediction journal — predicted vs actual (ground truth), joined view
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=120, show_spinner=False)
+def load_prediction_journal(n_weeks: int = 12) -> pd.DataFrame:
+    """All predictions (pending + resolved) over the last n_weeks, for the
+    Prediction Journal page. One row per prediction with whatever
+    resolution fields are populated."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(weeks=n_weeks)).isoformat()
+
+    rows = _fetch("predictions", order_by="-signal_date")
+    if rows:
+        df = pd.DataFrame(rows)
+    else:
+        all_preds = _read_json("predictions_journal.json")
+        df = pd.DataFrame(all_preds) if all_preds else pd.DataFrame()
+
+    if df.empty or "signal_date" not in df.columns:
+        return df
+    df = df[df["signal_date"] >= cutoff].reset_index(drop=True)
+    if "outcome_resolved" in df.columns:
+        df["outcome_resolved"] = df["outcome_resolved"].fillna(False)
+    else:
+        df["outcome_resolved"] = False
+    return df.sort_values("signal_date", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 9. Open trades with live unrealized P&L (net of estimated exit costs)
+# ---------------------------------------------------------------------------
+def load_open_trades_with_live_pnl() -> pd.DataFrame:
+    """Open paper trades enriched with a live price + net unrealized P&L.
+
+    Not cached at this layer (delegates to prices.fetch_latest_prices, which
+    is itself cached) so it reflects the latest fetch within its own TTL.
+    """
+    from app.utils.prices import fetch_latest_prices
+    from src.trading.paper_trader import Trade
+
+    trades = load_paper_trades()
+    if trades.empty:
+        return trades
+    open_t = trades[trades["status"] == "open"].copy()
+    if open_t.empty:
+        return open_t
+
+    tickers = tuple(sorted(open_t["ticker"].unique().tolist()))
+    live = fetch_latest_prices(tickers)
+
+    def _row_pnl(r):
+        price = live.get(r["ticker"])
+        if price is None:
+            return pd.Series({"current_price": None, "unrealized_pnl": None, "unrealized_pnl_pct": None})
+        t = Trade(
+            trade_id=r.get("trade_id", ""), ticker=r["ticker"], entry_date=str(r.get("entry_date", "")),
+            entry_price=float(r["entry_price"]), shares=int(r["shares"]), signal=r.get("signal", "LONG"),
+            stop_loss=float(r.get("stop_loss", 0) or 0), target_price=float(r.get("target_price", 0) or 0),
+            horizon_days=int(r.get("horizon_days", 5) or 5), prob_up=float(r.get("prob_up", 0.5) or 0.5),
+            entry_charges=float(r.get("entry_charges", 0) or 0),
+        )
+        return pd.Series({
+            "current_price": round(price, 2),
+            "unrealized_pnl": round(t.unrealised_pnl(price), 2),
+            "unrealized_pnl_pct": round(t.unrealised_pnl_pct(price) * 100, 2),
+        })
+
+    enriched = open_t.join(open_t.apply(_row_pnl, axis=1))
+    return enriched
+
+
+# ---------------------------------------------------------------------------
 # Cache invalidation helper
 # ---------------------------------------------------------------------------
 def refresh_all() -> None:
@@ -244,3 +325,5 @@ def refresh_all() -> None:
     load_weekly_ic.clear()
     load_feature_importance.clear()
     load_outcomes.clear()
+    load_account_ledger.clear()
+    load_prediction_journal.clear()

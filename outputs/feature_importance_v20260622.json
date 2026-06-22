@@ -1,202 +1,202 @@
 [
   {
     "feature": "vix_z20",
-    "score": 0.035454265773296356
+    "score": 0.031178170815110207
   },
   {
     "feature": "nifty_dist_sma200",
-    "score": 0.032538335770368576
+    "score": 0.029509540647268295
   },
   {
     "feature": "vix",
-    "score": 0.02918831817805767
+    "score": 0.02783113345503807
   },
   {
     "feature": "month",
-    "score": 0.028597014024853706
+    "score": 0.02781129628419876
   },
   {
     "feature": "rvol_10d",
-    "score": 0.028165986761450768
+    "score": 0.02605060674250126
   },
   {
     "feature": "day_of_month",
-    "score": 0.024271609261631966
-  },
-  {
-    "feature": "vix_change_5d",
-    "score": 0.02401057817041874
+    "score": 0.025717008858919144
   },
   {
     "feature": "nifty_dist_sma50",
-    "score": 0.02360888570547104
+    "score": 0.023842833936214447
   },
   {
     "feature": "nifty_ret_21d",
-    "score": 0.023238232359290123
+    "score": 0.022483309730887413
   },
   {
-    "feature": "atr_norm_rank",
-    "score": 0.021517105400562286
-  },
-  {
-    "feature": "ret_21d",
-    "score": 0.021495984867215157
+    "feature": "vix_change_5d",
+    "score": 0.022094694897532463
   },
   {
     "feature": "nifty_ret_5d",
-    "score": 0.021106017753481865
-  },
-  {
-    "feature": "day_of_week",
-    "score": 0.020905477926135063
-  },
-  {
-    "feature": "cum_ret_21d_rank",
-    "score": 0.02088514156639576
-  },
-  {
-    "feature": "rvol_21d",
-    "score": 0.019915755838155746
-  },
-  {
-    "feature": "macd_hist",
-    "score": 0.01972455531358719
-  },
-  {
-    "feature": "macd",
-    "score": 0.01959722489118576
-  },
-  {
-    "feature": "cum_ret_63d",
-    "score": 0.019323375076055527
-  },
-  {
-    "feature": "park_vol_21",
-    "score": 0.019121963530778885
+    "score": 0.021625351160764694
   },
   {
     "feature": "is_expiry_week",
-    "score": 0.018889088183641434
+    "score": 0.021598737686872482
   },
   {
-    "feature": "ret_10d",
-    "score": 0.018733704462647438
-  },
-  {
-    "feature": "vwap_dev",
-    "score": 0.018627746030688286
-  },
-  {
-    "feature": "beta_63d",
-    "score": 0.018372442573308945
-  },
-  {
-    "feature": "dist_sma200",
-    "score": 0.018361054360866547
-  },
-  {
-    "feature": "bb_width",
-    "score": 0.018114039674401283
-  },
-  {
-    "feature": "macd_signal",
-    "score": 0.0180185716599226
-  },
-  {
-    "feature": "rsi_14_rank",
-    "score": 0.017996683716773987
-  },
-  {
-    "feature": "atr_norm",
-    "score": 0.017517929896712303
-  },
-  {
-    "feature": "dist_sma10",
-    "score": 0.01725860871374607
-  },
-  {
-    "feature": "dist_sma20",
-    "score": 0.017246341332793236
-  },
-  {
-    "feature": "rsi_14",
-    "score": 0.017204588279128075
+    "feature": "atr_norm_rank",
+    "score": 0.020810429006814957
   },
   {
     "feature": "cum_ret_21d",
-    "score": 0.017066387459635735
+    "score": 0.020134612917900085
+  },
+  {
+    "feature": "cum_ret_21d_rank",
+    "score": 0.020047834143042564
+  },
+  {
+    "feature": "dist_sma200",
+    "score": 0.01990392990410328
+  },
+  {
+    "feature": "park_vol_21",
+    "score": 0.01979493722319603
+  },
+  {
+    "feature": "macd_hist",
+    "score": 0.019498512148857117
+  },
+  {
+    "feature": "macd",
+    "score": 0.01934756152331829
   },
   {
     "feature": "rvol_63d",
-    "score": 0.017018646001815796
+    "score": 0.01925577037036419
+  },
+  {
+    "feature": "beta_63d",
+    "score": 0.01910775527358055
+  },
+  {
+    "feature": "ret_21d",
+    "score": 0.01896054483950138
+  },
+  {
+    "feature": "rvol_21d",
+    "score": 0.018797514960169792
+  },
+  {
+    "feature": "dist_sma20",
+    "score": 0.01844293810427189
+  },
+  {
+    "feature": "macd_signal",
+    "score": 0.018405569717288017
   },
   {
     "feature": "cum_ret_10d",
-    "score": 0.016972772777080536
+    "score": 0.018332794308662415
+  },
+  {
+    "feature": "atr_norm",
+    "score": 0.01830366812646389
+  },
+  {
+    "feature": "bb_width",
+    "score": 0.01817583478987217
+  },
+  {
+    "feature": "cum_ret_63d",
+    "score": 0.01787101849913597
+  },
+  {
+    "feature": "vwap_dev",
+    "score": 0.017750445753335953
   },
   {
     "feature": "dist_sma50",
-    "score": 0.016879890114068985
-  },
-  {
-    "feature": "bb_pctb",
-    "score": 0.016757071018218994
-  },
-  {
-    "feature": "ret_5d",
-    "score": 0.016629034653306007
-  },
-  {
-    "feature": "cum_ret_5d",
-    "score": 0.01647031307220459
+    "score": 0.017744971439242363
   },
   {
     "feature": "adx",
-    "score": 0.01607469469308853
-  },
-  {
-    "feature": "dist_sma5",
-    "score": 0.015931909903883934
-  },
-  {
-    "feature": "price_pos_63d",
-    "score": 0.01579931192100048
-  },
-  {
-    "feature": "alpha_5d",
-    "score": 0.01549556851387024
-  },
-  {
-    "feature": "stoch_d",
-    "score": 0.015383398160338402
-  },
-  {
-    "feature": "obv_z20",
-    "score": 0.015306890942156315
+    "score": 0.017577463760972023
   },
   {
     "feature": "price_pos_21d",
-    "score": 0.015145617537200451
+    "score": 0.01737501472234726
+  },
+  {
+    "feature": "price_pos_63d",
+    "score": 0.017258772626519203
+  },
+  {
+    "feature": "ret_10d",
+    "score": 0.01718226447701454
+  },
+  {
+    "feature": "dist_sma10",
+    "score": 0.016932852566242218
+  },
+  {
+    "feature": "stoch_d",
+    "score": 0.016932006925344467
   },
   {
     "feature": "stoch_k",
-    "score": 0.015005080960690975
+    "score": 0.016758615151047707
   },
   {
-    "feature": "ret_5d_rank",
-    "score": 0.014664105139672756
+    "feature": "rsi_14",
+    "score": 0.01668836548924446
+  },
+  {
+    "feature": "rsi_14_rank",
+    "score": 0.01654765196144581
+  },
+  {
+    "feature": "cum_ret_5d",
+    "score": 0.016445884481072426
   },
   {
     "feature": "price_pos_10d",
-    "score": 0.014579251408576965
+    "score": 0.016334475949406624
+  },
+  {
+    "feature": "ret_5d",
+    "score": 0.016127847135066986
+  },
+  {
+    "feature": "bb_pctb",
+    "score": 0.01592928171157837
+  },
+  {
+    "feature": "dist_sma5",
+    "score": 0.01573915220797062
+  },
+  {
+    "feature": "alpha_5d",
+    "score": 0.015565839596092701
+  },
+  {
+    "feature": "obv_z20",
+    "score": 0.01541108638048172
   },
   {
     "feature": "ret_3d",
-    "score": 0.013450494036078453
+    "score": 0.015331640839576721
+  },
+  {
+    "feature": "ret_5d_rank",
+    "score": 0.014542806893587112
+  },
+  {
+    "feature": "ret_2d",
+    "score": 0.01439595315605402
   },
   {
     "feature": "ret_1d",
-    "score": 0.012737924233078957
+    "score": 0.01309757400304079
   }
 ]

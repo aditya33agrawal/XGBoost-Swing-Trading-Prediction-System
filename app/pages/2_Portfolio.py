@@ -12,10 +12,15 @@ from app.utils.charts import equity_curve_chart, exit_reason_chart, pnl_distribu
 
 st.set_page_config(page_title="Portfolio", page_icon="💼", layout="wide")
 st.title("💼 Paper Trading Portfolio")
+st.caption("Analytics overview. To open, close, or edit positions, go to **🎯 Trade Desk**.")
 
-if st.button("⟳ Refresh"):
-    refresh_all()
-    st.rerun()
+col_r, col_link = st.columns([1, 5])
+with col_r:
+    if st.button("⟳ Refresh"):
+        refresh_all()
+        st.rerun()
+with col_link:
+    st.markdown("🎯 [Manage positions in Trade Desk](Trade_Desk)")
 
 # ── Load data ────────────────────────────────────────────────────────────────
 trades = load_paper_trades()
@@ -46,6 +51,17 @@ c3.metric("Total Return",     f"{total_ret:+.1f}%",
 c4.metric("Open Positions",   len(open_t))
 c5.metric("Win Rate",         f"{win_rate:.0f}%",
           delta=f"{n_win} / {len(closed_t)} trades")
+
+# ── Gross vs net (cost drag) ──────────────────────────────────────────────────
+if not closed_t.empty and "gross_pnl" in closed_t.columns:
+    total_gross = closed_t["gross_pnl"].sum()
+    total_charges = closed_t.get("entry_charges", pd.Series(dtype=float)).sum() + \
+                    closed_t.get("exit_charges", pd.Series(dtype=float)).sum()
+    g1, g2, g3 = st.columns(3)
+    g1.metric("Gross P&L (price only)", f"₹{total_gross:+,.0f}")
+    g2.metric("Net P&L (after charges)", f"₹{total_pnl:+,.0f}")
+    g3.metric("Cost Drag", f"₹{total_charges:,.0f}",
+              delta=f"{(total_charges/abs(total_gross)*100 if total_gross else 0):.1f}% of gross")
 
 st.divider()
 

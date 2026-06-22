@@ -82,8 +82,12 @@ def enrich_signals(
     signals["atr14"] = signals["atr14"].fillna(signals["close"] * 0.015)
     signals = signals.rename(columns={"close": "entry_price"})
 
-    stop_mult   = getattr(cfg, "barrier_dn_mult", 1.5)
-    target_mult = getattr(cfg, "barrier_up_mult", 2.0)
+    # Use the dedicated signal exit multipliers, NOT the label barriers.
+    # The label barriers (barrier_*_mult) define the classification target; the
+    # paper/live stop & target are a separate risk decision.  Default 1.5×ATR
+    # stop / 3.0×ATR target gives a ~2:1 payoff instead of the old symmetric 1:1.
+    stop_mult   = getattr(cfg, "signal_stop_atr_mult", 1.5)
+    target_mult = getattr(cfg, "signal_target_atr_mult", 3.0)
 
     signals["stop_loss"]    = (signals["entry_price"] - stop_mult   * signals["atr14"]).round(2)
     signals["target_price"] = (signals["entry_price"] + target_mult * signals["atr14"]).round(2)

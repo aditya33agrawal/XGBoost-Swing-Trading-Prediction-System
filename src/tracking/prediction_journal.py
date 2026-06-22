@@ -229,3 +229,36 @@ def sync_paper_trades(
         logger.info("Synced %d paper trades to Supabase", len(rows))
         return len(rows)
     return 0
+
+
+# ---------------------------------------------------------------------------
+# 4. Sync account ledger (funds statement)
+# ---------------------------------------------------------------------------
+def sync_ledger(
+    portfolio,
+    run_id: str,
+    supabase_client,
+    fallback_dir: str = "outputs",
+) -> int:
+    """Upsert all funds-ledger rows from PaperPortfolio into account_ledger.
+
+    Idempotent (each ledger row has a stable uuid `id`). Always mirrors to
+    outputs/ledger.json so local/offline mode has the same statement.
+    Returns count of rows synced (Supabase path) or written (JSON-only path).
+    """
+    if not getattr(portfolio, "ledger", None):
+        return 0
+
+    rows = [_json_safe({**row, "run_id": run_id}) for row in portfolio.ledger]
+
+    sb_ok = upsert_rows(supabase_client, "account_ledger", rows, on_conflict="id")
+    if sb_ok:
+        logger.info("Synced %d ledger rows to Supabase", len(rows))
+
+    fpath = _fallback_path(fallback_dir, "ledger.json")
+    try:
+        fpath.write_text(json.dumps(rows, indent=2, default=str))
+        return len(rows)
+    except Exception as exc:
+        logger.warning("ledger.json write failed: %s", exc)
+        return len(rows) if sb_ok else 0

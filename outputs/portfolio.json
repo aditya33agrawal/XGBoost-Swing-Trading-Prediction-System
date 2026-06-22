@@ -1,0 +1,23 @@
+{
+  "saved_at": "2026-06-22T17:23:17.152286",
+  "initial_capital": 1000000,
+  "cash": 1000000,
+  "position_size_pct": 0.05,
+  "max_positions": 10,
+  "slippage_bps": 10.0,
+  "trades": [],
+  "ledger": [
+    {
+      "id": "3bddd31f-401f-4066-9abb-13874a2bb60f",
+      "ts": "2026-06-22T17:23:17.152108",
+      "type": "OPENING_BALANCE",
+      "trade_id": "",
+      "ticker": "",
+      "qty": 0,
+      "price": 0.0,
+      "amount": 1000000,
+      "running_balance": 1000000,
+      "note": "Account opened"
+    }
+  ]
+}

@@ -1,187 +1,99 @@
-"""Page 5: Settings — manual position management, triggers, config display."""
+"""Page 5: Settings — connection diagnostics, config display, CLI reference.
+
+Manual position management has moved to 🎯 Trade Desk; outcome resolution
+has moved to 📓 Prediction Journal (both now do the real thing — this page
+used to call resolve_outcomes(price_df=None, ...) which silently resolved
+nothing).
+"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import os
-import json
-from datetime import date, datetime
-
 import streamlit as st
-import pandas as pd
 
-from app.utils.data_loader import load_paper_trades, load_portfolio_meta, refresh_all
+from app.utils.data_loader import refresh_all
+from app.utils.env import get_supabase_url, get_supabase_key
 
 st.set_page_config(page_title="Settings", page_icon="⚙️", layout="wide")
-st.title("⚙️ Settings & Controls")
+st.title("⚙️ Settings & Diagnostics")
 
 # ── Manual controls ───────────────────────────────────────────────────────────
 st.subheader("Manual Controls")
-
-col1, col2, col3 = st.columns(3)
-
+col1, col2 = st.columns(2)
 with col1:
     if st.button("⟳ Refresh All Data", use_container_width=True):
         refresh_all()
         st.rerun()
-
 with col2:
-    if st.button("🔄 Resolve Outcomes Now", use_container_width=True):
-        with st.spinner("Resolving outcomes…"):
-            try:
-                import yfinance as yf
-                from src.db.supabase_client import get_supabase_client
-                from src.tracking.outcome_tracker import resolve_outcomes
-
-                url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
-                key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
-                sb  = get_supabase_client(url, key)
-                n   = resolve_outcomes(price_df=None, supabase_client=sb)
-                st.success(f"Resolved {n} predictions.")
-                refresh_all()
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-with col3:
-    if st.button("📊 Generate Signals (Fast)", use_container_width=True):
-        st.info("Run this command in your terminal:\n```\npython run_pipeline.py --fast-signals\n```")
+    st.markdown("📡 [Go trade a signal](Signals)")
 
 st.divider()
 
-# ── Manual position management ────────────────────────────────────────────────
-st.subheader("Manual Position Management")
+# ── Connection diagnostics ────────────────────────────────────────────────────
+st.subheader("Database Connection")
 
-trades = load_paper_trades()
-open_t = trades[trades["status"] == "open"] if not trades.empty else pd.DataFrame()
+url = get_supabase_url()
+key = get_supabase_key()
 
-tab1, tab2 = st.tabs(["Close Position", "Add Position"])
-
-with tab1:
-    if open_t.empty:
-        st.info("No open positions to close.")
-    else:
-        tickers = open_t["ticker"].tolist() if "ticker" in open_t.columns else []
-        ticker_to_close = st.selectbox("Select position to close", tickers)
-
-        if ticker_to_close:
-            row = open_t[open_t["ticker"] == ticker_to_close].iloc[0]
-            col_a, col_b = st.columns(2)
-            with col_a:
-                st.write(f"**Entry price:** ₹{row.get('entry_price', '?'):,.2f}")
-                st.write(f"**Shares:** {row.get('shares', '?')}")
-            with col_b:
-                exit_price  = st.number_input("Exit Price (₹)", min_value=0.0, step=0.5)
-                exit_reason = st.selectbox("Exit Reason", ["manual", "target", "stop", "expired"])
-
-            if st.button("Close Position", type="primary"):
-                try:
-                    portfolio_path = os.path.join("outputs", "portfolio.json")
-                    if not os.path.exists(portfolio_path):
-                        st.error("portfolio.json not found.")
-                    else:
-                        with open(portfolio_path) as f:
-                            port = json.load(f)
-                        for t in port.get("trades", []):
-                            if t["ticker"] == ticker_to_close and t["status"] == "open":
-                                t["status"]      = "closed"
-                                t["exit_date"]   = str(date.today())
-                                t["exit_price"]  = exit_price
-                                t["exit_reason"] = exit_reason
-                                shares    = float(t.get("shares", 0))
-                                entry     = float(t.get("entry_price", 0))
-                                t["pnl"]     = round((exit_price - entry) * shares, 2)
-                                t["pnl_pct"] = round((exit_price / entry - 1) * 100, 2) if entry else 0
-                                port["cash"]  = round(float(port.get("cash", 0)) + exit_price * shares, 2)
-                                break
-                        with open(portfolio_path, "w") as f:
-                            json.dump(port, f, indent=2)
-                        st.success(f"Closed {ticker_to_close} at ₹{exit_price:,.2f}")
-                        refresh_all()
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Error closing position: {e}")
-
-with tab2:
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        new_ticker     = st.text_input("Ticker (e.g. RELIANCE.NS)")
-        new_entry      = st.number_input("Entry Price (₹)", min_value=0.0, step=0.5)
-        new_shares     = st.number_input("Shares", min_value=1, step=1, value=10)
-    with col_b:
-        new_stop       = st.number_input("Stop Loss (₹)", min_value=0.0, step=0.5)
-        new_target     = st.number_input("Target Price (₹)", min_value=0.0, step=0.5)
-        new_horizon    = st.number_input("Horizon (days)", min_value=1, value=5, step=1)
-    with col_c:
-        new_prob       = st.slider("Model Confidence (prob_up)", 0.0, 1.0, 0.5, 0.01)
-        new_entry_date = st.date_input("Entry Date", value=date.today())
-
-    if st.button("Add Position", type="primary"):
-        if not new_ticker or new_entry <= 0:
-            st.warning("Ticker and entry price are required.")
-        else:
-            try:
-                portfolio_path = os.path.join("outputs", "portfolio.json")
-                port = {"trades": [], "cash": 1_000_000, "initial_capital": 1_000_000}
-                if os.path.exists(portfolio_path):
-                    with open(portfolio_path) as f:
-                        port = json.load(f)
-
-                trade_id = f"{new_ticker}_{new_entry_date}_{datetime.now().strftime('%H%M%S')}"
-                trade = {
-                    "trade_id":    trade_id,
-                    "ticker":      new_ticker.upper(),
-                    "entry_date":  str(new_entry_date),
-                    "entry_price": new_entry,
-                    "shares":      int(new_shares),
-                    "signal":      "LONG",
-                    "stop_loss":   new_stop,
-                    "target_price":new_target,
-                    "horizon_days":int(new_horizon),
-                    "prob_up":     new_prob,
-                    "status":      "open",
-                    "run_id":      "manual",
-                }
-                port.setdefault("trades", []).append(trade)
-                cost = new_entry * int(new_shares)
-                port["cash"] = round(float(port.get("cash", 0)) - cost, 2)
-
-                with open(portfolio_path, "w") as f:
-                    json.dump(port, f, indent=2)
-                st.success(f"Added {new_ticker.upper()} position (cost ₹{cost:,.0f})")
-                refresh_all()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error adding position: {e}")
-
-st.divider()
-
-# ── Configuration display ─────────────────────────────────────────────────────
-st.subheader("Current Configuration")
 
 def _mask(val: str) -> str:
     if not val:
         return "— (not set)"
     return val[:8] + "…" + val[-4:] if len(val) > 12 else "****"
 
-try:
-    supabase_url = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
-    supabase_key = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
-except Exception:
-    supabase_url = os.getenv("SUPABASE_URL", "")
-    supabase_key = os.getenv("SUPABASE_KEY", "")
 
 col1, col2 = st.columns(2)
 with col1:
-    st.markdown("**Database**")
-    st.write(f"Supabase URL: `{_mask(supabase_url)}`")
-    st.write(f"Supabase Key: `{_mask(supabase_key)}`")
-    st.write(f"Status: {'✅ Connected' if supabase_url else '⚠️ JSON fallback mode'}")
-
+    st.write(f"Supabase URL: `{_mask(url)}`")
+    st.write(f"Supabase Key: `{_mask(key)}`")
+    st.write(f"Status: {'✅ Configured' if (url and key) else '⚠️ JSON fallback mode'}")
 with col2:
-    st.markdown("**Output paths**")
-    st.write(f"Signals: `outputs/signals_latest.csv`")
-    st.write(f"Portfolio: `outputs/portfolio.json`")
-    st.write(f"Model runs: `outputs/model_runs.json`")
+    st.write("**Output paths**")
+    st.write("Signals: `outputs/signals_latest.csv`")
+    st.write("Portfolio: `outputs/portfolio.json`")
+    st.write("Ledger: `outputs/ledger.json`")
+    st.write("Model runs: `outputs/model_runs.json`")
+
+if st.button("🔍 Test Connection", type="primary"):
+    if not (url and key):
+        st.error("No URL/key configured — set SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_KEY) "
+                 "in .env (local) or Streamlit Cloud Secrets.")
+    else:
+        from src.db.supabase_client import get_supabase_client, fetch_rows, upsert_rows
+        client = get_supabase_client(url, key)
+        if client is None:
+            st.error("Could not create a Supabase client — check the URL/key and that the `supabase` "
+                      "package is installed.")
+        else:
+            st.success("Client created. Checking tables…")
+            results = []
+            for table in ["predictions", "paper_trades", "outcomes", "model_runs",
+                          "feature_importance", "account_ledger"]:
+                try:
+                    rows = fetch_rows(client, table, limit=1)
+                    n = len(rows)
+                    results.append((table, "✅ reachable", f"sample rows: {n}"))
+                except Exception as exc:
+                    results.append((table, "❌ error", str(exc)))
+            for table, status, detail in results:
+                st.write(f"**{table}** — {status} — {detail}")
+
+            st.write("**Write check** (no-op upsert + delete on a health probe row):")
+            probe_id = "00000000-0000-0000-0000-000000000000"
+            ok = upsert_rows(client, "account_ledger", [{
+                "id": probe_id, "ts": "2000-01-01T00:00:00", "type": "OPENING_BALANCE",
+                "amount": 0, "running_balance": 0, "note": "connection probe",
+            }], on_conflict="id")
+            if ok:
+                st.success("✅ Writes are permitted with this key.")
+                try:
+                    client.table("account_ledger").delete().eq("id", probe_id).execute()
+                except Exception:
+                    pass
+            else:
+                st.error("❌ Write failed — this key cannot write (check RLS policies or use the "
+                          "secret key). Trade logging from the app will not persist to Supabase "
+                          "until this is fixed.")
 
 st.divider()
 
@@ -208,30 +120,36 @@ with st.expander("Supabase Setup"):
     st.markdown("""
 **1. Create account** at [supabase.com](https://supabase.com) (free tier)
 
-**2. Run the SQL schema** in the Supabase dashboard SQL editor (see `README.md` or plan doc)
+**2. Run `docs/supabase_schema.sql`** once in the Supabase SQL editor — adds the
+real-money charge columns to `paper_trades` and creates `account_ledger`.
 
 **3. Set environment variables** in `.env`:
 ```
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key
+SUPABASE_SECRET_KEY=sb_secret_xxx
 ```
 
 **4. For Streamlit Cloud**: App Settings → Secrets:
 ```toml
 SUPABASE_URL = "https://your-project.supabase.co"
-SUPABASE_KEY = "your-anon-key"
+SUPABASE_SECRET_KEY = "sb_secret_xxx"
 ```
+
+Use the **secret** key (not the publishable/anon key) so the app can write
+trades and ledger rows — see Test Connection above to verify.
 """)
 
 with st.expander("Colab Weekly Workflow"):
     st.markdown("""
 **Every Sunday:**
 1. Open `notebooks/colab_weekly.ipynb` in Google Colab
-2. Set secrets in Colab: `SUPABASE_URL`, `SUPABASE_KEY`
+2. Set secrets in Colab: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`
 3. Run all cells (GPU runtime recommended)
 4. Cell 4 resolves last week's outcomes + shows IC trend
 5. Cell 5 retrains model (50 Optuna trials, ~30 min on GPU)
 6. Cell 6–7 deploys new model if IC improved by ≥ 0.005
 7. Cell 8 generates next week's signals → pushed to Supabase
-8. This Streamlit app refreshes automatically from new data
+8. This Streamlit app refreshes automatically from new data — go to
+   **📡 Signals** to trade them and **📓 Prediction Journal** to resolve
+   last week's outcomes.
 """)

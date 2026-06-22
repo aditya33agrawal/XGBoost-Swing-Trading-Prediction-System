@@ -3,8 +3,11 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import os
+from datetime import date, datetime
+
 import streamlit as st
+
+from app.utils.env import get_supabase_url, get_supabase_key
 
 st.set_page_config(
     page_title="Swing Trader Dashboard",
@@ -30,17 +33,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-def _get_secret(key: str, default: str = "") -> str:
-    try:
-        return st.secrets.get(key, os.getenv(key, default))
-    except Exception:
-        return os.getenv(key, default)
-
 # ── Session-state defaults ─────────────────────────────────────────────────────
 if "supabase_url" not in st.session_state:
-    st.session_state["supabase_url"] = _get_secret("SUPABASE_URL")
+    st.session_state["supabase_url"] = get_supabase_url()
 if "supabase_key" not in st.session_state:
-    st.session_state["supabase_key"] = _get_secret("SUPABASE_KEY")
+    st.session_state["supabase_key"] = get_supabase_key()
+
+is_connected = bool(st.session_state.get("supabase_url") and st.session_state.get("supabase_key"))
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -52,8 +51,6 @@ with st.sidebar:
     st.caption("Nifty 50 · XGBoost · Auto-improving")
     st.divider()
 
-    # DB status badge
-    is_connected = bool(st.session_state.get("supabase_url"))
     badge_color  = "#22c55e" if is_connected else "#f59e0b"
     badge_label  = "Supabase" if is_connected else "JSON fallback"
     st.markdown(
@@ -66,10 +63,13 @@ with st.sidebar:
     st.markdown("""
 **Pages**
 - 📡 [Signals](Signals) — this week's picks
-- 💼 [Portfolio](Portfolio) — open / closed trades
+- 💼 [Portfolio](Portfolio) — equity curve & analytics
 - 📈 [Performance](Performance) — IC, accuracy
-- 🩺 [Model Health](Model_Health) — drift, features
-- ⚙️ [Settings](Settings) — controls, config
+- 🩺 [Model_Health](Model_Health) — drift, features
+- ⚙️ [Settings](Settings) — config, diagnostics
+- 🎯 [Trade_Desk](Trade_Desk) — open/close/edit trades
+- 📓 [Prediction_Journal](Prediction_Journal) — predicted vs actual
+- 🧾 [Account](Account) — funds ledger / statement
 """)
 
     st.divider()
@@ -81,32 +81,99 @@ with st.sidebar:
 
 # ── Home page ─────────────────────────────────────────────────────────────────
 st.title("📊 Swing Trader Dashboard")
+
+# ── Live workflow tiles ────────────────────────────────────────────────────────
+try:
+    from app.utils.data_loader import (
+        load_signals, load_paper_trades, load_prediction_journal,
+        load_weekly_ic, load_portfolio_meta,
+    )
+
+    signals_df = load_signals()
+    trades_df  = load_paper_trades()
+    journal_df = load_prediction_journal(n_weeks=8)
+    ic_df      = load_weekly_ic(n_weeks=4)
+    meta       = load_portfolio_meta()
+
+    open_t = trades_df[trades_df["status"] == "open"] if not trades_df.empty else trades_df
+    n_open = len(open_t)
+
+    pending_n = 0
+    if not journal_df.empty and "outcome_resolved" in journal_df.columns:
+        pending_n = int((~journal_df["outcome_resolved"].astype(bool)).sum())
+
+    latest_ic = None
+    if not ic_df.empty:
+        ic_series = ic_df["ic"].dropna()
+        latest_ic = ic_series.iloc[-1] if len(ic_series) else None
+
+    long_n = 0
+    signal_date_str = None
+    if not signals_df.empty:
+        long_n = int((signals_df["signal"] == "LONG").sum()) if "signal" in signals_df.columns else 0
+        signal_date_str = str(signals_df["signal_date"].iloc[0]) if "signal_date" in signals_df.columns else None
+
+    cash = float(meta.get("cash", meta.get("initial_capital", 1_000_000)))
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Open Positions", n_open, delta=f"₹{cash:,.0f} cash")
+    c2.metric("LONG Signals (latest)", long_n, delta=signal_date_str or "—")
+    c3.metric("Pending Resolutions", pending_n)
+    c4.metric("Latest Weekly IC", f"{latest_ic:.4f}" if latest_ic is not None else "—")
+
+    st.divider()
+
+    # ── "What do I do this week?" checklist ───────────────────────────────────
+    st.subheader("This Week's Checklist")
+    checklist = []
+    if long_n > 0:
+        checklist.append(f"📡 **{long_n} LONG signal(s)** ready to trade — go to Signals.")
+    if pending_n > 0:
+        checklist.append(f"🔄 **{pending_n} prediction(s)** ready to resolve — go to Prediction Journal.")
+    if signal_date_str:
+        try:
+            sd = datetime.strptime(signal_date_str[:10], "%Y-%m-%d").date()
+            days_old = (date.today() - sd).days
+            if days_old > 7:
+                checklist.append(f"⚠️ Signals are **{days_old} days old** — looks like the weekly Colab run was missed.")
+        except Exception:
+            pass
+    if not checklist:
+        checklist.append("✅ Nothing urgent — all caught up.")
+    for item in checklist:
+        st.markdown(f"- {item}")
+
+except Exception as exc:
+    st.info(f"Live tiles unavailable yet ({exc}). Run the pipeline to generate data.")
+
+st.divider()
+
 st.markdown(
-    "Welcome! Use the **sidebar** to navigate between pages.  \n"
-    "Start with **📡 Signals** to see this week's predictions."
+    "Use the **sidebar** to navigate. Start with **📡 Signals** to act on this week's predictions, "
+    "or **🎯 Trade Desk** to manage open positions."
 )
 
 col1, col2, col3 = st.columns(3)
 
 with col1:
     st.info("""
-**📡 Signals**
-This week's LONG signals with entry, stop-loss, and target levels.
-Confidence scored by the XGBoost model (prob_up).
+**📡 Signals → 🎯 Trade Desk**
+Open a real (paper) position straight from a signal — pre-filled entry/stop/target,
+charged real NSE delivery costs (STT, GST, DP charge) and slippage.
 """)
 
 with col2:
     st.info("""
-**💼 Portfolio**
-Paper trading account — equity curve, open positions, closed trade history,
-win rate, and P&L breakdown.
+**📓 Prediction Journal**
+Every prediction vs. its ground-truth outcome — pending vs resolved,
+hit/miss, exportable for the next weekly Colab run.
 """)
 
 with col3:
     st.info("""
-**🩺 Model Health**
-IC trend, feature importance, model version history.
-GREEN = IC > 0.01, AMBER = IC 0–0.01, RED = IC < 0.
+**🧾 Account**
+A broker-style funds statement — every BUY/SELL/CHARGE/DEPOSIT/WITHDRAWAL,
+running balance, and total charges paid to date.
 """)
 
 st.divider()
@@ -115,8 +182,8 @@ st.divider()
 if not is_connected:
     st.warning(
         "**Supabase not configured** — running in JSON fallback mode.  \n"
-        "Set `SUPABASE_URL` and `SUPABASE_KEY` in `.env` (local) or "
+        "Set `SUPABASE_URL` and `SUPABASE_KEY` (or `SUPABASE_SECRET_KEY`) in `.env` (local) or "
         "Streamlit Cloud Secrets (deployed) to enable live DB sync."
     )
 else:
-    st.success("Connected to Supabase. All data syncs automatically after each pipeline run.")
+    st.success("Connected to Supabase. All data syncs automatically after each pipeline run and every trade action.")

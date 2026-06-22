@@ -166,6 +166,7 @@ def _optuna_objective(
     splits: list,
     task: str,
     sample_weights_arr: np.ndarray | None,
+    eval_target: pd.Series | None = None,
 ):
     from scipy import stats as sp_stats
     xgb = _get_xgb()
@@ -207,10 +208,13 @@ def _optuna_objective(
                       eval_set=[(X_vl, y_vl)], verbose=False)
             preds = model.predict(X_vl)
 
-        # Objective: Information Coefficient (Spearman) on realised forward return
-        # For classification, we use the raw probability as the predicted signal
-        if len(y_vl) > 1:
-            ic, _ = sp_stats.spearmanr(preds, y_vl.values)
+        # Objective: Information Coefficient (Spearman) on realised forward return.
+        # The strategy P&L and the reported OOF IC both rank against `fwd_ret`, so
+        # we tune against `fwd_ret` (eval_target) rather than the discrete
+        # triple-barrier label {-1,0,1}.  Falls back to y when no eval_target given.
+        target_vl = eval_target.iloc[val_idx].values if eval_target is not None else y_vl.values
+        if len(target_vl) > 1:
+            ic, _ = sp_stats.spearmanr(preds, target_vl)
             fold_scores.append(ic if not np.isnan(ic) else 0.0)
 
     return float(np.mean(fold_scores)) if fold_scores else 0.0
@@ -224,8 +228,14 @@ def tune_hyperparameters(
     task: str = "classification",
     n_trials: int = 50,
     sample_weights: np.ndarray | None = None,
+    eval_target_col: str = "fwd_ret",
 ) -> dict:
-    """Run Optuna search; return best params dict."""
+    """Run Optuna search; return best params dict.
+
+    The trial objective ranks predictions against ``eval_target_col`` (the
+    realised forward return) when that column is present, so HPO optimises the
+    same signal the backtest trades — not the discrete classification label.
+    """
     try:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -235,6 +245,13 @@ def tune_hyperparameters(
 
     X = df_train[feature_cols]
     y = df_train[target_col]
+    if eval_target_col in df_train.columns:
+        eval_target = df_train[eval_target_col].reset_index(drop=True)
+        logger.info("Optuna objective: ranking IC vs '%s'", eval_target_col)
+    else:
+        eval_target = None
+        logger.info("Optuna objective: ranking IC vs target '%s' (no %s column)",
+                    target_col, eval_target_col)
 
     study = optuna.create_study(
         direction="maximize",
@@ -257,7 +274,7 @@ def tune_hyperparameters(
         )
 
     study.optimize(
-        lambda t: _optuna_objective(t, X, y, splits, task, sample_weights),
+        lambda t: _optuna_objective(t, X, y, splits, task, sample_weights, eval_target),
         n_trials=n_trials,
         show_progress_bar=False,
         n_jobs=1,

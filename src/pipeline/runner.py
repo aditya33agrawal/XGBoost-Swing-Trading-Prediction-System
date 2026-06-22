@@ -45,7 +45,7 @@ from src.backtest.engine import run_backtest, sensitivity_analysis
 from src.trading.signals import enrich_signals, save_signals, print_signal_table
 from src.trading.paper_trader import PaperPortfolio
 from src.db.supabase_client import get_supabase_client
-from src.tracking.prediction_journal import save_predictions, save_run_metadata, sync_paper_trades
+from src.tracking.prediction_journal import save_predictions, save_run_metadata, sync_paper_trades, sync_ledger
 from src.models.improvement import get_model_version
 from src.registry.bundle import save_bundle, prune_old_bundles
 from src.monitoring.drift import (
@@ -675,6 +675,9 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             n_synced = sync_paper_trades(portfolio, _run_id, _sb)
             if n_synced:
                 logger.info("Synced %d paper trades to Supabase", n_synced)
+            n_ledger = sync_ledger(portfolio, _run_id, _sb, fallback_dir=cfg.output_dir)
+            if n_ledger:
+                logger.info("Synced %d ledger rows to Supabase", n_ledger)
 
     print("\n" + "=" * 72)
     print("Pipeline complete.")

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "76e73ae8-78b6-4d36-ad2f-cee315bfe808",
+    "ts": "2026-06-22T13:49:36.887726",
+    "type": "OPENING_BALANCE",
+    "trade_id": "",
+    "ticker": "",
+    "qty": 0,
+    "price": 0.0,
+    "amount": 1000000,
+    "running_balance": 754264.71,
+    "note": "Account opened",
+    "run_id": "ui"
+  },
+  {
+    "id": "66486637-f561-43af-809c-4c672d03458b",
+    "ts": "2026-06-22T17:19:36.277439",
+    "type": "SELL",
+    "trade_id": "4be9aea6",
+    "ticker": "HINDALCO.NS",
+    "qty": 56,
+    "price": 1013.19,
+    "amount": 56738.41,
+    "running_balance": 811003.12,
+    "note": "Sold 56 HINDALCO.NS (target)",
+    "run_id": "ui"
+  },
+  {
+    "id": "7c60688b-5c6c-4793-9c50-f43f45e36c24",
+    "ts": "2026-06-22T17:19:36.277509",
+    "type": "CHARGE",
+    "trade_id": "4be9aea6",
+    "ticker": "HINDALCO.NS",
+    "qty": 56,
+    "price": 1013.19,
+    "amount": -71.79,
+    "running_balance": 810931.32,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 56.73840548291015, 'exchange': 1.6851306428424315, 'sebi': 0.05673840548291015, 'stamp': 0.0, 'gst': 0.31353642869856146, 'dp_charge': 13.0, 'total': 71.79381095993406}",
+    "run_id": "ui"
+  }
+]

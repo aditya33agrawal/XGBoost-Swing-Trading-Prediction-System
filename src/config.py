@@ -14,8 +14,15 @@ class Config:
     # --- target / label --------------------------------------------------
     horizon: int = 5                      # swing horizon in trading days
     label_type: Literal["fwd_ret", "triple_barrier"] = "triple_barrier"
-    barrier_up_mult: float = 2.0          # ×ATR upper barrier
-    barrier_dn_mult: float = 2.0          # ×ATR lower barrier
+    barrier_up_mult: float = 2.0          # ×ATR upper barrier (label only)
+    barrier_dn_mult: float = 2.0          # ×ATR lower barrier (label only)
+
+    # --- signal exit levels (paper/live trades — decoupled from label) ---
+    # The label barriers above define the classification target; they are NOT
+    # the stop/target the paper trader executes.  A symmetric ±2 ATR pair gives
+    # a 1:1 payoff which bleeds at a sub-0.5 hit rate.  These let winners run.
+    signal_stop_atr_mult:   float = 1.5   # ×ATR below entry → stop loss
+    signal_target_atr_mult: float = 3.0   # ×ATR above entry → take profit (RR≈2.0)
 
     # --- walk-forward ----------------------------------------------------
     train_min_days: int = 504             # ~2 years before first prediction
@@ -131,6 +138,8 @@ class Config:
         if "position_size_pct" in r: flat["position_size_pct"] = r["position_size_pct"]
         if "initial_capital" in r:   flat["initial_capital"] = r["initial_capital"]
         if "regime_filter" in r:     flat["regime_filter"] = r["regime_filter"]
+        if "signal_stop_atr_mult" in r:   flat["signal_stop_atr_mult"] = r["signal_stop_atr_mult"]
+        if "signal_target_atr_mult" in r: flat["signal_target_atr_mult"] = r["signal_target_atr_mult"]
         reg = data.get("registry", {})
         if "keep_bundles" in reg:    flat["keep_bundles"] = reg["keep_bundles"]
 

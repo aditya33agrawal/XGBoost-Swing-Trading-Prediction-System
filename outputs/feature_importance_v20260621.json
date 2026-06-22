@@ -1,0 +1,202 @@
+[
+  {
+    "feature": "vix_z20",
+    "score": 0.03295568376779556
+  },
+  {
+    "feature": "nifty_dist_sma200",
+    "score": 0.030414052307605743
+  },
+  {
+    "feature": "vix",
+    "score": 0.028834640979766846
+  },
+  {
+    "feature": "month",
+    "score": 0.028746936470270157
+  },
+  {
+    "feature": "is_expiry_week",
+    "score": 0.02603275515139103
+  },
+  {
+    "feature": "nifty_dist_sma50",
+    "score": 0.025023741647601128
+  },
+  {
+    "feature": "day_of_month",
+    "score": 0.02484329789876938
+  },
+  {
+    "feature": "rvol_10d",
+    "score": 0.0248002540320158
+  },
+  {
+    "feature": "nifty_ret_21d",
+    "score": 0.022673601284623146
+  },
+  {
+    "feature": "vix_change_5d",
+    "score": 0.021802779287099838
+  },
+  {
+    "feature": "cum_ret_21d_rank",
+    "score": 0.02155352011322975
+  },
+  {
+    "feature": "nifty_ret_5d",
+    "score": 0.021290084347128868
+  },
+  {
+    "feature": "ret_21d",
+    "score": 0.020657289773225784
+  },
+  {
+    "feature": "atr_norm_rank",
+    "score": 0.020373331382870674
+  },
+  {
+    "feature": "dist_sma200",
+    "score": 0.020319415256381035
+  },
+  {
+    "feature": "macd_signal",
+    "score": 0.019873492419719696
+  },
+  {
+    "feature": "park_vol_21",
+    "score": 0.0196645837277174
+  },
+  {
+    "feature": "macd",
+    "score": 0.01953810267150402
+  },
+  {
+    "feature": "rvol_63d",
+    "score": 0.019439037889242172
+  },
+  {
+    "feature": "rvol_21d",
+    "score": 0.019403398036956787
+  },
+  {
+    "feature": "beta_63d",
+    "score": 0.019398631528019905
+  },
+  {
+    "feature": "cum_ret_21d",
+    "score": 0.019359169527888298
+  },
+  {
+    "feature": "cum_ret_63d",
+    "score": 0.01923307217657566
+  },
+  {
+    "feature": "bb_width",
+    "score": 0.019209319725632668
+  },
+  {
+    "feature": "ret_10d",
+    "score": 0.01897457055747509
+  },
+  {
+    "feature": "macd_hist",
+    "score": 0.018596092239022255
+  },
+  {
+    "feature": "price_pos_21d",
+    "score": 0.018473591655492783
+  },
+  {
+    "feature": "dist_sma20",
+    "score": 0.018434911966323853
+  },
+  {
+    "feature": "dist_sma50",
+    "score": 0.0182348620146513
+  },
+  {
+    "feature": "rsi_14",
+    "score": 0.018231172114610672
+  },
+  {
+    "feature": "atr_norm",
+    "score": 0.017811231315135956
+  },
+  {
+    "feature": "stoch_d",
+    "score": 0.017557788640260696
+  },
+  {
+    "feature": "price_pos_63d",
+    "score": 0.017471950501203537
+  },
+  {
+    "feature": "vwap_dev",
+    "score": 0.017054958269000053
+  },
+  {
+    "feature": "rsi_14_rank",
+    "score": 0.016961626708507538
+  },
+  {
+    "feature": "cum_ret_10d",
+    "score": 0.016876576468348503
+  },
+  {
+    "feature": "bb_pctb",
+    "score": 0.016845744103193283
+  },
+  {
+    "feature": "dist_sma10",
+    "score": 0.016435449942946434
+  },
+  {
+    "feature": "cum_ret_5d",
+    "score": 0.016396965831518173
+  },
+  {
+    "feature": "price_pos_10d",
+    "score": 0.01614863984286785
+  },
+  {
+    "feature": "ret_5d",
+    "score": 0.015789099037647247
+  },
+  {
+    "feature": "ret_5d_rank",
+    "score": 0.015784170478582382
+  },
+  {
+    "feature": "obv_z20",
+    "score": 0.015647629275918007
+  },
+  {
+    "feature": "stoch_k",
+    "score": 0.015475645661354065
+  },
+  {
+    "feature": "dist_sma5",
+    "score": 0.015311910770833492
+  },
+  {
+    "feature": "alpha_5d",
+    "score": 0.015053355135023594
+  },
+  {
+    "feature": "ret_3d",
+    "score": 0.014704683795571327
+  },
+  {
+    "feature": "vol_z20",
+    "score": 0.013850887306034565
+  },
+  {
+    "feature": "ret_2d",
+    "score": 0.01344254706054926
+  },
+  {
+    "feature": "ret_1d",
+    "score": 0.013382276520133018
+  }
+]
