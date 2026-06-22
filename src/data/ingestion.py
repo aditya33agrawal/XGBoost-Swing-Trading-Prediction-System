@@ -22,24 +22,61 @@ RNG = np.random.default_rng(42)
 
 
 # ---------------------------------------------------------------------------
-# Point-in-time Nifty 50 universe
+# Point-in-time Nifty 200 universe (Nifty 100 + Nifty Midcap 100)
 # ---------------------------------------------------------------------------
-# Current composition (as of June 2026).  For a production system, maintain
-# a nifty50_membership(symbol, start_date, end_date) table to avoid
-# survivorship bias (see plan §5.2).  This flat list is used as the starting
-# universe; the storage layer checks membership per date.
+# Current composition (as of June 2026), widened from the original Nifty 50
+# list per docs/model-improvement-plan.md Phase 1.7 — more cross-sectional
+# breadth (bigger long basket → less idiosyncratic drawdown) and reach into
+# less-efficient mid-caps where IC tends to be structurally higher.
+#
+# NOTE — survivorship bias is NOT solved by this widening alone (plan §A2):
+# this is still today's constituents applied across all history. A real fix
+# needs a nifty200_membership(symbol, start_date, end_date) table sourced
+# from NSE semi-annual reconstitution circulars (plan Phase 1.6, tracked in
+# config/universe.json). A few very recent IPOs below (e.g. GROWW, LENSKART,
+# SWIGGY, VMM, TATACAPITAL) will simply have short/NaN history pre-listing —
+# the existing dropna(feature_cols) handling already deals with that safely.
 UNIVERSE: list[str] = [
-    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
-    "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS",
-    "LT.NS", "AXISBANK.NS", "BAJFINANCE.NS", "ASIANPAINT.NS", "MARUTI.NS",
-    "HCLTECH.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS",
-    "NESTLEIND.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TMPV.NS",
-    "TATASTEEL.NS", "JSWSTEEL.NS", "M&M.NS", "ADANIENT.NS", "ADANIPORTS.NS",
-    "COALINDIA.NS", "GRASIM.NS", "HINDALCO.NS", "BAJAJFINSV.NS", "TECHM.NS",
-    "BEL.NS", "DRREDDY.NS", "CIPLA.NS", "ETERNAL.NS", "TRENT.NS",
-    "EICHERMOT.NS", "INDIGO.NS", "BAJAJ-AUTO.NS", "APOLLOHOSP.NS",
-    "TATACONSUM.NS", "JIOFIN.NS", "SBILIFE.NS", "HDFCLIFE.NS", "SHRIRAMFIN.NS",
-    "MAXHEALTH.NS",
+    "360ONE.NS", "ABB.NS", "ABCAPITAL.NS", "ADANIENSOL.NS", "ADANIENT.NS",
+    "ADANIGREEN.NS", "ADANIPORTS.NS", "ADANIPOWER.NS", "ALKEM.NS", "AMBUJACEM.NS",
+    "APLAPOLLO.NS", "APOLLOHOSP.NS", "ASHOKLEY.NS", "ASIANPAINT.NS", "ASTRAL.NS",
+    "ATGL.NS", "AUBANK.NS", "AUROPHARMA.NS", "AXISBANK.NS", "BAJAJ-AUTO.NS",
+    "BAJAJFINSV.NS", "BAJAJHLDNG.NS", "BAJFINANCE.NS", "BANKBARODA.NS", "BANKINDIA.NS",
+    "BDL.NS", "BEL.NS", "BHARATFORG.NS", "BHARTIARTL.NS", "BHEL.NS",
+    "BIOCON.NS", "BLUESTARCO.NS", "BOSCHLTD.NS", "BPCL.NS", "BRITANNIA.NS",
+    "BSE.NS", "CANBK.NS", "CGPOWER.NS", "CHOLAFIN.NS", "CIPLA.NS",
+    "COALINDIA.NS", "COCHINSHIP.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS",
+    "COROMANDEL.NS", "CUMMINSIND.NS", "DABUR.NS", "DIVISLAB.NS", "DIXON.NS",
+    "DLF.NS", "DMART.NS", "DRREDDY.NS", "EICHERMOT.NS", "ETERNAL.NS",
+    "EXIDEIND.NS", "FEDERALBNK.NS", "FORTIS.NS", "GAIL.NS", "GET&D.NS",
+    "GLENMARK.NS", "GMRAIRPORT.NS", "GODFRYPHLP.NS", "GODREJCP.NS", "GODREJPROP.NS",
+    "GRASIM.NS", "GROWW.NS", "HAL.NS", "HAVELLS.NS", "HCLTECH.NS",
+    "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS",
+    "HINDPETRO.NS", "HINDUNILVR.NS", "HINDZINC.NS", "HUDCO.NS", "HYUNDAI.NS",
+    "ICICIBANK.NS", "ICICIGI.NS", "IDEA.NS", "IDFCFIRSTB.NS", "INDHOTEL.NS",
+    "INDIANB.NS", "INDIGO.NS", "INDUSINDBK.NS", "INDUSTOWER.NS", "INFY.NS",
+    "IOC.NS", "IRCTC.NS", "IREDA.NS", "IRFC.NS", "ITC.NS",
+    "JINDALSTEL.NS", "JIOFIN.NS", "JSWENERGY.NS", "JSWSTEEL.NS", "JUBLFOOD.NS",
+    "KALYANKJIL.NS", "KEI.NS", "KOTAKBANK.NS", "KPITTECH.NS", "LAURUSLABS.NS",
+    "LENSKART.NS", "LICHSGFIN.NS", "LODHA.NS", "LT.NS", "LTF.NS",
+    "LTIM.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANKIND.NS",
+    "MARICO.NS", "MARUTI.NS", "MAXHEALTH.NS", "MAZDOCK.NS", "MCDOWELL-N.NS",
+    "MCX.NS", "MFSL.NS", "MOTHERSON.NS", "MOTILALOFS.NS", "MPHASIS.NS",
+    "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAUKRI.NS", "NESTLEIND.NS",
+    "NHPC.NS", "NMDC.NS", "NTPC.NS", "NYKAA.NS", "OBEROIRLTY.NS",
+    "OFSS.NS", "OIL.NS", "ONGC.NS", "PAGEIND.NS", "PATANJALI.NS",
+    "PAYTM.NS", "PERSISTENT.NS", "PFC.NS", "PHOENIXLTD.NS", "PIDILITIND.NS",
+    "PIIND.NS", "PNB.NS", "POLICYBZR.NS", "POLYCAB.NS", "POWERGRID.NS",
+    "POWERINDIA.NS", "PREMIERENE.NS", "PRESTIGE.NS", "RADICO.NS", "RECLTD.NS",
+    "RELIANCE.NS", "RVNL.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS",
+    "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SOLARINDS.NS",
+    "SRF.NS", "SUNPHARMA.NS", "SUPREMEIND.NS", "SUZLON.NS", "SWIGGY.NS",
+    "TATACAPITAL.NS", "TATACOMM.NS", "TATACONSUM.NS", "TATAELXSI.NS", "TATAINVEST.NS",
+    "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TIINDIA.NS",
+    "TITAN.NS", "TMPV.NS", "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS",
+    "ULTRACEMCO.NS", "UNIONBANK.NS", "UPL.NS", "VBL.NS", "VEDL.NS",
+    "VMM.NS", "VOLTAS.NS", "WAAREEENER.NS", "WIPRO.NS", "YESBANK.NS",
+    "ZYDUSLIFE.NS",
 ]
 
 
@@ -133,9 +170,13 @@ def _retry_tickers_individually(
     """Try downloading failed tickers one-by-one with alternate symbol variants."""
     import yfinance as yf
 
-    # Some NSE tickers have known yfinance symbol differences
+    # Some NSE tickers have known yfinance symbol differences, or were
+    # recently renamed/relisted and the exact symbol is unconfirmed.
     ALIASES: dict[str, list[str]] = {
         "M&M.NS": ["M&M.NS", "MM.NS"],
+        "GET&D.NS": ["GET&D.NS", "GVT&D.NS"],
+        "LTF.NS": ["LTF.NS", "L&TFH.NS"],
+        "MCDOWELL-N.NS": ["MCDOWELL-N.NS", "UNITDSPR.NS"],
     }
 
     frames = []

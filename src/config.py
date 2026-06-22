@@ -39,6 +39,10 @@ class Config:
     rebalance_every: int = 5              # days between rebalance points
     n_quantile: int = 5                   # quintile for long/short selection
     mode: Literal["long_only", "long_short"] = "long_only"
+    # Weight each basket member by score-rank conviction instead of equal
+    # weight (plan §Phase 4.19) — targets weak Calmar/drawdown without
+    # touching the underlying alpha signal. False = old equal-weight behaviour.
+    conviction_weighted_sizing: bool = True
 
     # --- risk overlay ----------------------------------------------------
     # Go flat (no new longs) when the Nifty index is below its long SMA.
@@ -55,6 +59,12 @@ class Config:
     xgb_n_trials: int = 50               # Optuna trials
     xgb_early_stopping: int = 50
     xgb_seed: int = 42
+    # Multi-seed bagging per walk-forward step (plan §Phase 3.16) — averaging
+    # independent noisy XGBoost fits reduces the run-to-run OOF IC instability
+    # observed across retrains (same data/hyperparams, different random_state).
+    # 1 = old single-model behaviour. Keep modest (3-5); cost scales linearly
+    # with the walk-forward loop, which already runs hundreds of steps.
+    ensemble_size: int = 3
     # "auto" → use GPU if one is visible (Colab), else CPU. Force with "cuda"/"cpu".
     device: Literal["auto", "cuda", "cpu"] = "auto"
 
@@ -134,7 +144,8 @@ class Config:
         if "dn_mult" in b: flat["barrier_dn_mult"] = b["dn_mult"]
         if "n_quantile" in data: flat["n_quantile"] = data["n_quantile"]
         if "mode" in data:       flat["mode"] = data["mode"]
-        for k in ("train_min_days", "embargo", "n_wf_splits"):
+        if "conviction_weighted_sizing" in data: flat["conviction_weighted_sizing"] = data["conviction_weighted_sizing"]
+        for k in ("train_min_days", "embargo", "n_wf_splits", "ensemble_size"):
             if k in data: flat[k] = data[k]
         c = data.get("costs", {})
         if "cost_bps_per_side" in c: flat["cost_bps_per_side"] = c["cost_bps_per_side"]

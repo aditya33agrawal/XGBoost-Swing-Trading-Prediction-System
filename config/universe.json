@@ -1,145 +1,25 @@
 {
-  "index": "NIFTY50",
-  "note": "Point-in-time constituents. To avoid survivorship bias, set end_date when a name leaves the index and append a new row for its replacement (plan \u00a75.2). Maintained manually + scraped from NSE index circulars.",
-  "as_of_generated": "2026-06-21",
+  "index": "NIFTY200",
+  "note": "Point-in-time constituents. Widened from NIFTY50 to NIFTY200 per docs/model-improvement-plan.md Phase 1.7 (more cross-sectional breadth, less-efficient mid-caps). Survivorship bias is NOT yet fixed (Phase 1.6, still open): every start_date is 2015-01-01 / end_date null, i.e. today's constituents applied across all history. To fix properly, set end_date when a name leaves the index and append a new row for its replacement, sourced from NSE semi-annual index circulars. Maintained manually + scraped.",
+  "as_of_generated": "2026-06-23",
   "members": [
     {
-      "symbol": "RELIANCE.NS",
+      "symbol": "360ONE.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "TCS.NS",
+      "symbol": "ABB.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "HDFCBANK.NS",
+      "symbol": "ABCAPITAL.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "ICICIBANK.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "INFY.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "HINDUNILVR.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "ITC.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "SBIN.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "BHARTIARTL.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "KOTAKBANK.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "LT.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "AXISBANK.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "BAJFINANCE.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "ASIANPAINT.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "MARUTI.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "HCLTECH.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "SUNPHARMA.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "TITAN.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "ULTRACEMCO.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "WIPRO.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "NESTLEIND.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "ONGC.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "NTPC.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "POWERGRID.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "TMPV.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "TATASTEEL.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "JSWSTEEL.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "M&M.NS",
+      "symbol": "ADANIENSOL.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
@@ -149,72 +29,32 @@
       "end_date": null
     },
     {
+      "symbol": "ADANIGREEN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
       "symbol": "ADANIPORTS.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "COALINDIA.NS",
+      "symbol": "ADANIPOWER.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "GRASIM.NS",
+      "symbol": "ALKEM.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "HINDALCO.NS",
+      "symbol": "AMBUJACEM.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "BAJAJFINSV.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "TECHM.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "BEL.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "DRREDDY.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "CIPLA.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "ETERNAL.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "TRENT.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "EICHERMOT.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "INDIGO.NS",
-      "start_date": "2015-01-01",
-      "end_date": null
-    },
-    {
-      "symbol": "BAJAJ-AUTO.NS",
+      "symbol": "APLAPOLLO.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
@@ -224,17 +64,302 @@
       "end_date": null
     },
     {
-      "symbol": "TATACONSUM.NS",
+      "symbol": "ASHOKLEY.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "JIOFIN.NS",
+      "symbol": "ASIANPAINT.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
-      "symbol": "SBILIFE.NS",
+      "symbol": "ASTRAL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ATGL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "AUBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "AUROPHARMA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "AXISBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BAJAJ-AUTO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BAJAJFINSV.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BAJAJHLDNG.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BAJFINANCE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BANKBARODA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BANKINDIA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BDL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BHARATFORG.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BHARTIARTL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BHEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BIOCON.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BLUESTARCO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BOSCHLTD.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BPCL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BRITANNIA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "BSE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CANBK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CGPOWER.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CHOLAFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CIPLA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "COALINDIA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "COCHINSHIP.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "COFORGE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "COLPAL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CONCOR.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "COROMANDEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "CUMMINSIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DABUR.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DIVISLAB.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DIXON.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DLF.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DMART.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "DRREDDY.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "EICHERMOT.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ETERNAL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "EXIDEIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "FEDERALBNK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "FORTIS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GAIL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GET&D.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GLENMARK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GMRAIRPORT.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GODFRYPHLP.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GODREJCP.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GODREJPROP.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GRASIM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "GROWW.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HAL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HAVELLS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HCLTECH.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HDFCAMC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HDFCBANK.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
@@ -244,12 +369,617 @@
       "end_date": null
     },
     {
-      "symbol": "SHRIRAMFIN.NS",
+      "symbol": "HEROMOTOCO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HINDALCO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HINDPETRO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HINDUNILVR.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HINDZINC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HUDCO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "HYUNDAI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ICICIBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ICICIGI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IDEA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IDFCFIRSTB.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INDHOTEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INDIANB.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INDIGO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INDUSINDBK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INDUSTOWER.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "INFY.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IOC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IRCTC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IREDA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "IRFC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ITC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "JINDALSTEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "JIOFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "JSWENERGY.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "JSWSTEEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "JUBLFOOD.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "KALYANKJIL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "KEI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "KOTAKBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "KPITTECH.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LAURUSLABS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LENSKART.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LICHSGFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LODHA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LT.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LTF.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LTIM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "LUPIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "M&M.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "M&MFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MANKIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MARICO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MARUTI.NS",
       "start_date": "2015-01-01",
       "end_date": null
     },
     {
       "symbol": "MAXHEALTH.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MAZDOCK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MCDOWELL-N.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MCX.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MFSL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MOTHERSON.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MOTILALOFS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MPHASIS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MRF.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "MUTHOOTFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NATIONALUM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NAUKRI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NESTLEIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NHPC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NMDC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NTPC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "NYKAA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "OBEROIRLTY.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "OFSS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "OIL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ONGC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PAGEIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PATANJALI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PAYTM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PERSISTENT.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PFC.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PHOENIXLTD.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PIDILITIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PIIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PNB.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "POLICYBZR.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "POLYCAB.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "POWERGRID.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "POWERINDIA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PREMIERENE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "PRESTIGE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "RADICO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "RECLTD.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "RELIANCE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "RVNL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SAIL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SBICARD.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SBILIFE.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SBIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SHREECEM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SHRIRAMFIN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SIEMENS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SOLARINDS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SRF.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SUNPHARMA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SUPREMEIND.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SUZLON.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "SWIGGY.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATACAPITAL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATACOMM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATACONSUM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATAELXSI.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATAINVEST.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATAPOWER.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TATASTEEL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TCS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TECHM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TIINDIA.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TITAN.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TMPV.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TORNTPHARM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TRENT.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "TVSMOTOR.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ULTRACEMCO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "UNIONBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "UPL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "VBL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "VEDL.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "VMM.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "VOLTAS.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "WAAREEENER.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "WIPRO.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "YESBANK.NS",
+      "start_date": "2015-01-01",
+      "end_date": null
+    },
+    {
+      "symbol": "ZYDUSLIFE.NS",
       "start_date": "2015-01-01",
       "end_date": null
     }

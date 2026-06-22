@@ -49,6 +49,20 @@ def _findings(stats: dict, sensitivity_df: pd.DataFrame | None, regime_stats: di
         bullets.append(f"Net Sharpe = {sharpe:.2f}, CAGR = {stats.get('CAGR', float('nan')):.2%}, "
                         f"max drawdown = {stats.get('max_drawdown', float('nan')):.2%}")
 
+    ic_ir = stats.get("oof_ic_ir")
+    t_stat = stats.get("oof_ic_t_stat")
+    if ic_ir is not None and t_stat is not None and ic_ir == ic_ir:  # not NaN
+        sig = "statistically significant" if abs(t_stat) >= 2.0 else "NOT statistically distinguishable from zero"
+        bullets.append(
+            f"Daily cross-sectional IC-IR = {ic_ir:.3f} (t-stat={t_stat:.2f}, "
+            f"n_days={stats.get('oof_ic_n_days')}) — {sig} at the usual |t|>=2 bar"
+        )
+
+    dsr = stats.get("deflated_sharpe")
+    if dsr is not None and dsr == dsr:  # not NaN
+        verdict = "plausibly real" if dsr >= 0.95 else "NOT yet distinguishable from a lucky draw among the Optuna trials"
+        bullets.append(f"Deflated Sharpe Ratio = {dsr:.3f} (P[true Sharpe>0] after multiple-testing correction) — {verdict}")
+
     if sensitivity_df is not None and not sensitivity_df.empty:
         row_2x = sensitivity_df[sensitivity_df["cost_mult"] == 2.0]
         if not row_2x.empty:
@@ -107,6 +121,10 @@ def build_backtest_report(
         "oof_metrics": {
             "oof_ic": stats.get("oof_ic"),
             "oof_dir_acc": stats.get("oof_dir_acc"),
+            "oof_ic_daily_mean": stats.get("oof_ic_daily_mean"),
+            "oof_ic_ir": stats.get("oof_ic_ir"),
+            "oof_ic_t_stat": stats.get("oof_ic_t_stat"),
+            "oof_ic_n_days": stats.get("oof_ic_n_days"),
         },
         "stats": {k: v for k, v in stats.items()
                   if k not in {"equity_curve", "period_returns", "error"}},
@@ -139,6 +157,17 @@ def write_backtest_report(report: dict, reports_dir: str = "reports", tag: str |
         for r in sens
     )
 
+    oof = report.get("oof_metrics", {})
+    dsr = stats.get("deflated_sharpe")
+    boot = stats.get("bootstrap_ci", {})
+    boot_block = (
+        f"- Sharpe  p05/p50/p95: {boot.get('sharpe_p05')} / {boot.get('sharpe_p50')} / {boot.get('sharpe_p95')}\n"
+        f"- CAGR    p05/p50/p95: {boot.get('cagr_p05')} / {boot.get('cagr_p50')} / {boot.get('cagr_p95')}\n"
+        f"- MaxDD   p05/p50/p95: {boot.get('max_drawdown_p05')} / {boot.get('max_drawdown_p50')} / {boot.get('max_drawdown_p95')}\n"
+        f"({boot.get('n_boot')} block-bootstrap draws, block_size={boot.get('block_size')})"
+        if boot and "error" not in boot else "- (not available)"
+    )
+
     retrain = report.get("retrain_recommended")
     retrain_line = (
         "**RETRAIN RECOMMENDED** (drift alarm)" if retrain
@@ -160,11 +189,18 @@ Generated: {report.get('generated_utc')}
 - date range fetched: {cov.get('date_min')} → {cov.get('date_max')}
 
 ## OOF metrics
-- OOF IC: {report.get('oof_metrics', {}).get('oof_ic')}
-- OOF directional accuracy: {report.get('oof_metrics', {}).get('oof_dir_acc')}
+- OOF IC (pooled, legacy): {oof.get('oof_ic')}
+- OOF directional accuracy: {oof.get('oof_dir_acc')}
+- OOF daily IC (mean cross-sectional Spearman per date): {oof.get('oof_ic_daily_mean')}
+- OOF IC-IR (mean/std of daily IC) / t-stat / n_days: {oof.get('oof_ic_ir')} / {oof.get('oof_ic_t_stat')} / {oof.get('oof_ic_n_days')}
 
 ## Backtest stats (cost-adjusted)
-{json.dumps(stats, indent=2)}
+{json.dumps({k: v for k, v in stats.items() if k != 'bootstrap_ci'}, indent=2)}
+
+## Robustness (Phase 0 — plan §A1/A9)
+- Deflated Sharpe Ratio (P[true Sharpe>0], corrected for {run.get('xgb_n_trials')} Optuna trials): {dsr}
+- Block-bootstrap CI (distribution across the one walk-forward path, not a point estimate):
+{boot_block}
 
 ## Cost sensitivity
 | cost multiplier | Sharpe | CAGR | max_drawdown |

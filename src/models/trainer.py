@@ -157,6 +157,48 @@ def train_xgb(
 
 
 # ---------------------------------------------------------------------------
+# Multi-seed bagging (plan §Phase 3.16) — averaging independent noisy fits
+# reduces the run-to-run OOF IC instability of a single point-estimate model.
+# Same data, same hyperparameters, only `random_state` differs per member.
+# ---------------------------------------------------------------------------
+def train_xgb_bag(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    params: dict,
+    sample_weight: np.ndarray | None = None,
+    early_stopping: int = 50,
+    task: str = "classification",
+    n_seeds: int = 3,
+    base_seed: int = 42,
+) -> list:
+    """Train `n_seeds` independent XGBoost models (only random_state differs).
+
+    Returns the list of fitted models; average their predictions with
+    `predict_bag` rather than picking any single one.
+    """
+    models = []
+    for i in range(max(1, n_seeds)):
+        seed_params = dict(params)
+        seed_params["random_state"] = base_seed + i
+        models.append(
+            train_xgb(X_train, y_train, X_val, y_val, seed_params,
+                      sample_weight=sample_weight, early_stopping=early_stopping, task=task)
+        )
+    return models
+
+
+def predict_bag(models: list, X: pd.DataFrame, task: str = "classification") -> np.ndarray:
+    """Average predictions across a bagged ensemble from `train_xgb_bag`."""
+    if task == "classification":
+        preds = np.stack([m.predict_proba(X)[:, 1] for m in models], axis=0)
+    else:
+        preds = np.stack([m.predict(X) for m in models], axis=0)
+    return preds.mean(axis=0)
+
+
+# ---------------------------------------------------------------------------
 # Optuna hyperparameter search
 # ---------------------------------------------------------------------------
 def _optuna_objective(

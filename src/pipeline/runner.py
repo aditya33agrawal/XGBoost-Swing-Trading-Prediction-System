@@ -34,13 +34,17 @@ from src.features.engineer import build_features
 from src.labels.targets import add_labels
 from src.labels.weights import sample_weights
 from src.models.trainer import (
-    train_xgb, tune_hyperparameters, fit_final_model,
+    train_xgb, train_xgb_bag, predict_bag, tune_hyperparameters, fit_final_model,
     _BASE_PARAMS_CLF, _BASE_PARAMS_REG, _get_xgb,
     set_device, apply_device, get_device,
 )
 from src.models.calibration import TimeOrderedCalibrator
 from src.validation.walk_forward import PurgedWalkForward
-from src.validation.metrics import information_coefficient, directional_accuracy, summarise
+from src.validation.metrics import (
+    information_coefficient, directional_accuracy, summarise,
+    daily_information_coefficient, ic_information_ratio,
+    deflated_sharpe_ratio, block_bootstrap_ci,
+)
 from src.backtest.engine import run_backtest, sensitivity_analysis
 from src.trading.signals import enrich_signals, save_signals, print_signal_table
 from src.trading.paper_trader import PaperPortfolio
@@ -77,6 +81,8 @@ def _print_backtest_results(stats: dict) -> None:
             "max_drawdown": "Max drawdown", "hit_rate": "Hit rate",
             "profit_factor": "Profit factor",
             "avg_period_ret": "Avg period return", "final_equity": "Final equity (×)",
+            "oof_ic_ir": "OOF daily IC-IR", "oof_ic_t_stat": "OOF IC t-stat",
+            "deflated_sharpe": "Deflated Sharpe (P>0)",
         }
         for k, label in labels.items():
             if k in stats and k not in skip:
@@ -169,13 +175,18 @@ def _walk_forward_predict(
 
         sw_tr = sw[train_df.index] if sw is not None else None
 
+        # Multi-seed bagging (plan §Phase 3.16): average `cfg.ensemble_size`
+        # independent fits (same data/params, different random_state) rather
+        # than trusting one noisy point estimate — directly targets the
+        # run-to-run OOF IC instability seen across retrains.
         try:
-            model = train_xgb(
+            models = train_xgb_bag(
                 X_tr, y_tr, X_vl, y_vl,
                 params=best_params,
                 sample_weight=sw_tr,
                 early_stopping=cfg.xgb_early_stopping,
                 task=task,
+                n_seeds=cfg.ensemble_size,
             )
         except Exception as e:
             logger.warning("training failed at %s: %s", rebal_date, e)
@@ -185,16 +196,15 @@ def _walk_forward_predict(
         # window is too sparse (notably the early 2017–2020 folds).  A 0-tree
         # model predicts a constant base rate: zero cross-sectional dispersion,
         # which adds pure noise to OOF IC and feeds random quintiles into the
-        # backtest.  Drop those degenerate folds rather than poison the metrics.
-        best_iter = getattr(model, "best_iteration", None)
-        if best_iter is not None and best_iter == 0:
-            logger.warning("skipping fold %s — best_iteration=0 (sparse train, no signal)", rebal_date)
+        # backtest.  Drop the fold if EVERY bag member degenerated this way.
+        best_iters = [getattr(m, "best_iteration", None) for m in models]
+        if all(bi is not None and bi == 0 for bi in best_iters):
+            logger.warning("skipping fold %s — best_iteration=0 for all %d bag members (sparse train, no signal)",
+                            rebal_date, len(models))
             continue
+        models = [m for m, bi in zip(models, best_iters) if not (bi is not None and bi == 0)]
 
-        if task == "classification":
-            scores = model.predict_proba(X_te)[:, 1]
-        else:
-            scores = model.predict(X_te)
+        scores = predict_bag(models, X_te, task=task)
 
         pred_cols = ["date", "ticker", "fwd_ret"]
         if cfg.regime_sma_col in test_df.columns:
@@ -209,10 +219,10 @@ def _walk_forward_predict(
             rate = elapsed / (step + 1)
             eta = rate * (n_steps - step - 1)
             logger.info(
-                "  step %3d/%d | %s | train=%d rows | best_iter=%s | ETA %.0fs",
+                "  step %3d/%d | %s | train=%d rows | best_iters=%s | ETA %.0fs",
                 step + 1, n_steps, pd.Timestamp(rebal_date).date(),
                 len(train_df),
-                getattr(model, "best_iteration", "n/a"),
+                best_iters,
                 eta,
             )
 
@@ -506,11 +516,25 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         print(f"  generated predictions for {n_dates} dates")
 
         oof_ic = oof_dir_acc = None
+        ic_ir_stats: dict = {}
         if not oof_preds.empty:
+            # Pooled IC (legacy, kept for run-to-run continuity) — conflates
+            # cross-sectional skill with time-series/market-level effects.
             oof_ic = float(information_coefficient(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
             oof_dir_acc = float(directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
-            print(f"  OOF Information Coefficient = {oof_ic:.4f}")
-            print(f"  OOF Directional Accuracy    = {oof_dir_acc:.4f}")
+            print(f"  OOF Information Coefficient (pooled) = {oof_ic:.4f}")
+            print(f"  OOF Directional Accuracy             = {oof_dir_acc:.4f}")
+
+            # Daily cross-sectional IC + IC-IR (plan §A1 / Phase 0) — the
+            # statistically honest measure of stock-picking skill, with a
+            # significance test (t-stat) that the pooled number can't give.
+            daily_ic = daily_information_coefficient(oof_preds)
+            ic_ir_stats = ic_information_ratio(daily_ic)
+            print(
+                f"  OOF Daily IC (mean/IC-IR/t-stat)      = "
+                f"{ic_ir_stats['mean_ic']:.4f} / {ic_ir_stats['ic_ir']:.3f} / "
+                f"{ic_ir_stats['t_stat']:.2f}  (n_days={ic_ir_stats['n_days']})"
+            )
 
         # Phase 4b: Cost-adjusted backtest
         print("\n[Phase 4b] Backtest with Indian transaction costs …")
@@ -518,6 +542,27 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         if oof_ic is not None:
             stats["oof_ic"] = oof_ic
             stats["oof_dir_acc"] = oof_dir_acc
+            stats["oof_ic_daily_mean"] = ic_ir_stats.get("mean_ic")
+            stats["oof_ic_ir"] = ic_ir_stats.get("ic_ir")
+            stats["oof_ic_t_stat"] = ic_ir_stats.get("t_stat")
+            stats["oof_ic_n_days"] = ic_ir_stats.get("n_days")
+
+        # Deflated Sharpe (multiple-testing correction for cfg.xgb_n_trials
+        # Optuna trials) + block-bootstrap CI on Sharpe/CAGR/maxDD — plan
+        # Phase 0.2-0.3. Both need the period-return series from the backtest.
+        if "period_returns" in stats and stats.get("Sharpe") is not None:
+            periods_per_year = 252.0 / cfg.rebalance_every
+            stats["deflated_sharpe"] = deflated_sharpe_ratio(
+                stats["Sharpe"], n_trials=max(cfg.xgb_n_trials, 1),
+                n_periods=stats.get("n_periods", 0),
+                periods_per_year=periods_per_year,
+            )
+            stats["bootstrap_ci"] = block_bootstrap_ci(
+                stats["period_returns"], periods_per_year=periods_per_year,
+            )
+            print(f"  Deflated Sharpe (P[true Sharpe>0], {cfg.xgb_n_trials} trials) = "
+                  f"{stats['deflated_sharpe']:.3f}")
+
         _print_backtest_results(stats)
 
         if not oof_preds.empty:

@@ -18,6 +18,26 @@ import src.backtest.costs as _costs_mod
 from src.validation.metrics import summarise
 
 
+def _conviction_weighted_return(basket: pd.DataFrame, reverse: bool = False) -> float:
+    """Weight each name in `basket` by its score-rank conviction *within the
+    basket* instead of equal-weighting (plan §Phase 4.19) — the most
+    confident name gets more capital than one barely past the cutoff. A
+    cheap stand-in for full meta-labeling-based sizing (plan §3.15): same
+    primary model score, just used for sizing as well as selection.
+
+    `reverse=True` for the short basket — most-bearish (lowest score) gets
+    the highest weight there.
+    """
+    if basket.empty:
+        return 0.0
+    # ascending=True ranks lowest pred as 1 → highest pred gets the largest
+    # rank/weight (longs); reverse=True flips it so the lowest pred (most
+    # bearish) gets the largest weight (shorts).
+    ranks = basket["pred"].rank(method="first", ascending=not reverse)
+    weights = ranks / ranks.sum()
+    return float((basket["fwd_ret"] * weights).sum())
+
+
 def run_backtest(
     preds: pd.DataFrame,
     cfg,
@@ -74,14 +94,26 @@ def run_backtest(
             labels=False,
         )
 
+        conviction_weighted = getattr(cfg, "conviction_weighted_sizing", True)
+
         longs = day[day["q"] == cfg.n_quantile - 1]
         long_set = set(longs["ticker"])
-        long_ret = float(longs["fwd_ret"].mean()) if not longs.empty else 0.0
+        if longs.empty:
+            long_ret = 0.0
+        elif conviction_weighted:
+            long_ret = _conviction_weighted_return(longs, reverse=False)
+        else:
+            long_ret = float(longs["fwd_ret"].mean())
 
         if cfg.mode == "long_short":
             shorts = day[day["q"] == 0]
             short_set = set(shorts["ticker"])
-            short_ret = float(shorts["fwd_ret"].mean()) if not shorts.empty else 0.0
+            if shorts.empty:
+                short_ret = 0.0
+            elif conviction_weighted:
+                short_ret = _conviction_weighted_return(shorts, reverse=True)
+            else:
+                short_ret = float(shorts["fwd_ret"].mean())
             gross = long_ret - short_ret
         else:
             short_set = set()

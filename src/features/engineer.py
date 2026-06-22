@@ -160,6 +160,24 @@ def _features_for_ticker(grp: pd.DataFrame) -> pd.DataFrame:
     vwap_proxy = (typical * v).rolling(20).sum() / (v.rolling(20).sum() + 1e-9)
     f["vwap_dev"] = c / (vwap_proxy + 1e-9) - 1.0
 
+    # --- deepened volume signal (plan §Phase 2.9) -------------------------
+    # vol_z20/obv_z20/vwap_dev above are all snapshot z-scores against a
+    # 20-day window. These add: (a) volume *trend* (building interest, the
+    # way price momentum captures price trend — a snapshot z-score can't see
+    # this); (b) dollar volume / turnover (also a relative-liquidity rank
+    # feature once cross-sectionally z-scored downstream); (c) volume-price
+    # divergence (the classic "weak breakout" tell — new high on light volume).
+    for n in (5, 21):
+        f[f"volume_roc_{n}d"] = np.log((v + 1.0) / (v.shift(n) + 1.0))
+
+    dollar_vol_20d = (c * v).rolling(20).mean()
+    f["dollar_vol_20d"] = np.log1p(dollar_vol_20d)
+
+    f["ret_vol_corr_21d"] = log_ret.rolling(21).corr(f["vol_z20"])
+    new_high_21d = (c >= c.rolling(21).max())
+    below_avg_vol = v < v_mean
+    f["weak_breakout_21d"] = (new_high_21d & below_avg_vol).astype(int)
+
     # --- calendar features ----------------------------------------------
     dates = pd.to_datetime(grp["date"])
     f["day_of_week"] = dates.dt.dayofweek.values
@@ -298,7 +316,7 @@ def build_features(
     df = _cs_zscore(df, cs_cols)
 
     # Cross-sectional rank columns for key features
-    rank_base = ["ret_5d", "cum_ret_21d", "rsi_14", "atr_norm", "vol_z20"]
+    rank_base = ["ret_5d", "cum_ret_21d", "rsi_14", "atr_norm", "vol_z20", "dollar_vol_20d"]
     rank_base = [c for c in rank_base if c in df.columns]
     df = _cs_rank(df, rank_base)
     feature_cols = [c for c in df.columns if c not in meta]

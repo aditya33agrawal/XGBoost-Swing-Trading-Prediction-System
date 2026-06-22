@@ -13,11 +13,13 @@ top_k: 10                  # trade the top-K names clearing the threshold
 prob_threshold: 0.5        # min calibrated P(TP-first) to consider a LONG
 n_quantile: 5
 mode: long_only            # long_only | long_short (long-short needs F&O)
+conviction_weighted_sizing: true  # size basket members by score-rank conviction, not equal weight (model-improvement-plan Phase 4.19)
 
 # --- walk-forward validation (swing-bot-plan §7) ---
 train_min_days: 504        # ~2y warmup before first prediction
 embargo: 5                 # >= horizon, purge gap
 n_wf_splits: 8
+ensemble_size: 3           # multi-seed bagging per walk-forward step (model-improvement-plan Phase 3.16)
 
 # --- costs (swing-bot-plan §10.3) — verify against current broker/exchange schedule ---
 costs:
