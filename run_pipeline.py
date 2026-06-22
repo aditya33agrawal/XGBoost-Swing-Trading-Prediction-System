@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     # Data / universe
     g_data = p.add_argument_group("data")
     g_data.add_argument("--start",  default="2015-01-01", help="History start date")
-    g_data.add_argument("--end",    default="2025-12-31", help="History end date")
+    g_data.add_argument("--end",    default=None, help="History end date (default: today)")
     g_data.add_argument("--db",     default="data/market.duckdb", help="DuckDB path")
 
     # Model
@@ -104,9 +104,11 @@ def main() -> None:
     setup_logging(args.log_level)
 
     fast = args.fast_signals
+    cfg_overrides = {}
+    if args.end is not None:
+        cfg_overrides["end"] = args.end
     cfg = Config(
         start          = args.start,
-        end            = args.end,
         horizon        = args.horizon,
         label_type     = args.label_type,
         mode           = args.mode,
@@ -129,6 +131,7 @@ def main() -> None:
         # Tracking / DB
         model_version    = args.model_version,
         save_to_supabase = not args.no_supabase,
+        **cfg_overrides,
     )
 
     run(cfg)

@@ -15,12 +15,26 @@ import streamlit as st
 logger = logging.getLogger(__name__)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_latest_price(ticker: str) -> float | None:
-    """Latest available close for `ticker`, or None on failure."""
+    """Current market price (CMP) for `ticker`, or None on failure.
+
+    Every fill must happen at the actual CMP, not a stale daily close, so
+    this tries the live last-traded price first (fast_info, intraday) and
+    only falls back to the last daily close if that's unavailable (e.g.
+    market closed or ticker delisted) — short 15s TTL keeps it fresh for
+    the "Take Trade" button.
+    """
     try:
         import yfinance as yf
-        hist = yf.Ticker(ticker).history(period="5d")
+        t = yf.Ticker(ticker)
+        try:
+            last = t.fast_info["last_price"]
+            if last and last > 0:
+                return float(last)
+        except Exception:
+            pass
+        hist = t.history(period="5d")
         if hist.empty:
             return None
         return float(hist["Close"].iloc[-1])
@@ -29,24 +43,37 @@ def fetch_latest_price(ticker: str) -> float | None:
         return None
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)
 def fetch_latest_prices(tickers: tuple[str, ...]) -> dict[str, float]:
-    """Batch latest-close fetch. Returns {ticker: price} for tickers found."""
+    """Batch CMP fetch. Returns {ticker: price} for tickers found.
+
+    Same live-first / daily-close-fallback logic as fetch_latest_price,
+    just batched.
+    """
     out: dict[str, float] = {}
     if not tickers:
         return out
     try:
         import yfinance as yf
-        data = yf.download(list(tickers), period="5d", group_by="ticker",
-                            progress=False, threads=True)
         for t in tickers:
             try:
-                col = data[t]["Close"] if len(tickers) > 1 else data["Close"]
-                col = col.dropna()
-                if not col.empty:
-                    out[t] = float(col.iloc[-1])
+                last = yf.Ticker(t).fast_info["last_price"]
+                if last and last > 0:
+                    out[t] = float(last)
             except Exception:
                 continue
+        missing = [t for t in tickers if t not in out]
+        if missing:
+            data = yf.download(missing, period="5d", group_by="ticker",
+                                progress=False, threads=True)
+            for t in missing:
+                try:
+                    col = data[t]["Close"] if len(missing) > 1 else data["Close"]
+                    col = col.dropna()
+                    if not col.empty:
+                        out[t] = float(col.iloc[-1])
+                except Exception:
+                    continue
     except Exception as exc:
         logger.warning("fetch_latest_prices failed: %s", exc)
     return out

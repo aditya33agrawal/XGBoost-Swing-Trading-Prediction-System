@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-06-22T17:23:17.152286",
+  "saved_at": "2026-06-22T22:08:39.737834",
   "initial_capital": 1000000,
   "cash": 1000000,
   "position_size_pct": 0.05,
@@ -8,8 +8,8 @@
   "trades": [],
   "ledger": [
     {
-      "id": "3bddd31f-401f-4066-9abb-13874a2bb60f",
-      "ts": "2026-06-22T17:23:17.152108",
+      "id": "4f2bec7d-52b0-4e21-a628-190fa259b9fe",
+      "ts": "2026-06-22T22:08:39.737761",
       "type": "OPENING_BALANCE",
       "trade_id": "",
       "ticker": "",

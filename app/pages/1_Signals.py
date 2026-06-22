@@ -9,9 +9,19 @@ import pandas as pd
 from app.utils.data_loader import load_signals, load_paper_trades, load_portfolio_meta, refresh_all
 from app.utils import writer
 from app.utils.prices import fetch_latest_prices
+from src.trading.market_hours import is_market_open, market_status_message
 
 st.set_page_config(page_title="Signals", page_icon="📡", layout="wide")
 st.title("📡 Today's Signals")
+
+market_open = is_market_open()
+if market_open:
+    st.info(market_status_message())
+else:
+    st.warning(market_status_message())
+if not market_open:
+    st.caption("Signals are still shown below — trading just opens the **Take Trade** "
+               "buttons only during market hours so every fill is a real CMP.")
 
 # ── Refresh ──────────────────────────────────────────────────────────────────
 col_r, col_date = st.columns([1, 5])
@@ -90,7 +100,7 @@ styled = (
     .applymap(_color_prob,   subset=["prob_up"])
 )
 
-st.dataframe(styled, use_container_width=True, height=350)
+st.dataframe(styled, width="stretch", height=350)
 
 # ── Probability chart ─────────────────────────────────────────────────────────
 if not long_df.empty and "prob_up" in long_df.columns:
@@ -109,7 +119,7 @@ if not long_df.empty and "prob_up" in long_df.columns:
         font_color="#e2e8f0", coloraxis_showscale=False,
         margin=dict(l=10, r=10, t=40, b=10),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.download_button(
     "⬇ Download CSV",
@@ -121,64 +131,36 @@ st.download_button(
 st.divider()
 
 # ── Trade actions ──────────────────────────────────────────────────────────────
-st.subheader("🎯 Trade These Signals")
+st.subheader("🎯 Take a Trade")
+st.caption("Every trade fills at CMP, fetched the moment you click — never the (older) price "
+           "shown in the signal table above. Nothing here ever opens by itself.")
 
 if long_df.empty:
     st.info("No LONG signals to trade today.")
 else:
-    # Live prices for every LONG ticker — these (not the stale signal entry_price)
-    # are what the order will actually fill at; writer.open_trade re-fetches the
-    # same way so the preview below matches the real fill.
-    live_prices = fetch_latest_prices(tuple(long_df["ticker"].tolist()))
+    # CMP for every LONG ticker, fetched fresh (short TTL) right before display —
+    # writer.open_trade re-fetches again at click time so the fill always matches.
+    # Some pipeline runs can insert duplicate rows for the same ticker/date —
+    # keep only the highest-confidence row per ticker so widget keys stay unique.
+    trade_candidates = long_df.sort_values("prob_up", ascending=False).drop_duplicates(
+        subset="ticker", keep="first"
+    )
+    cmp_prices = fetch_latest_prices(tuple(trade_candidates["ticker"].tolist()))
 
-    # Bulk open
-    with st.expander("⚡ Bulk: open all LONG signals", expanded=False):
-        top_n = st.slider("Open top N by confidence (skips already-open tickers)",
-                           1, len(long_df), min(5, len(long_df)))
-        if st.button("Open Top N", type="primary"):
-            candidates = long_df.sort_values("prob_up", ascending=False).head(top_n)
-            results = []
-            for _, row in candidates.iterrows():
-                ticker = row["ticker"]
-                if ticker in open_tickers:
-                    results.append(f"⏭️ {ticker} — already open, skipped")
-                    continue
-                signal_entry = float(row["entry_price"])
-                live = live_prices.get(ticker)
-                entry = float(live) if live else signal_entry
-                shares = max(1, int(cash * position_size_pct // entry))
-                ok, msg = writer.open_trade(
-                    ticker, entry, shares,
-                    stop_loss=float(row.get("stop_loss", entry * 0.97)),
-                    target_price=float(row.get("target_price", entry * 1.04)),
-                    horizon_days=int(row.get("horizon_days", 5)),
-                    prob_up=float(row.get("prob_up", 0.5)),
-                    opened_via="signal",
-                )
-                results.append(f"{'✅' if ok else '❌'} {ticker} — {msg}")
-            for r in results:
-                st.write(r)
-            st.rerun()
-
-    # Per-row trade
-    for _, row in long_df.sort_values("prob_up", ascending=False).iterrows():
+    for _, row in trade_candidates.iterrows():
         ticker = row["ticker"]
-        signal_entry = float(row["entry_price"])
-        live = live_prices.get(ticker)
-        entry = float(live) if live else signal_entry
+        cmp = cmp_prices.get(ticker)
         already_open = ticker in open_tickers
+        has_cmp = cmp is not None
 
-        with st.expander(
-            f"{'🟢 OPEN ' if not already_open else '✅ ALREADY OPEN — '}{ticker}  ·  "
-            f"prob_up {row.get('prob_up', 0):.1%}  ·  live ₹{entry:,.2f}"
-            f"{'' if live else ' (live price unavailable — using signal price)'}",
-            expanded=False,
-        ):
-            if live:
-                st.caption(f"Signal price (when generated): ₹{signal_entry:,.2f}  ·  "
-                           f"Live price (Yahoo, now): ₹{entry:,.2f}")
-            else:
-                st.warning(f"Could not fetch a live price for {ticker} — falling back to the signal price.")
+        label = f"{'✅ ALREADY OPEN — ' if already_open else ''}{ticker}  ·  prob_up {row.get('prob_up', 0):.1%}"
+        label += f"  ·  CMP ₹{cmp:,.2f}" if has_cmp else "  ·  CMP unavailable"
+
+        with st.expander(label, expanded=False):
+            if not has_cmp:
+                st.warning(f"Could not fetch a live CMP for {ticker} right now — try refreshing.")
+                continue
+            entry = float(cmp)
             default_shares = max(1, int(cash * position_size_pct // entry))
             col_a, col_b, col_c = st.columns(3)
             with col_a:
@@ -194,7 +176,7 @@ else:
             preview = writer.preview_buy(entry, int(shares))
             st.markdown("**Contract note preview**")
             pcol1, pcol2, pcol3, pcol4 = st.columns(4)
-            pcol1.metric("Fill price", f"₹{preview['fill_price']:,.2f}")
+            pcol1.metric("Fill price (CMP)", f"₹{preview['fill_price']:,.2f}")
             pcol2.metric("Charges", f"₹{preview['charges']['total']:,.2f}")
             pcol3.metric("Total debit", f"₹{preview['total_debit']:,.2f}")
             pcol4.metric("Break-even", f"₹{preview['breakeven_price']:,.2f}")
@@ -202,9 +184,15 @@ else:
             with st.popover("Charge breakdown"):
                 st.json(preview["charges"])
 
-            if st.button(f"Confirm — Open {ticker}", key=f"confirm_{ticker}", type="primary"):
+            if not market_open:
+                st.button(f"Take Trade — {ticker}", key=f"confirm_{ticker}",
+                          type="primary", disabled=True)
+                st.caption(market_status_message())
+                continue
+
+            if st.button(f"Take Trade — {ticker}", key=f"confirm_{ticker}", type="primary"):
                 ok, msg = writer.open_trade(
-                    ticker, entry, int(shares), float(stop), float(target),
+                    ticker, int(shares), float(stop), float(target),
                     horizon_days=int(row.get("horizon_days", 5)),
                     prob_up=float(row.get("prob_up", 0.5)),
                     opened_via="signal",

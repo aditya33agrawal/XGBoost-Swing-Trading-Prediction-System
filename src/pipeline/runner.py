@@ -495,6 +495,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     stats: dict = {}
     oof_preds: pd.DataFrame = pd.DataFrame()
+    sens: pd.DataFrame = pd.DataFrame()
 
     if cfg.skip_backtest:
         print("\n[Phase 4] Walk-forward skipped (--fast-signals mode)")
@@ -619,6 +620,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     # Phase 5g: Drift report — feature (PSI/KS), concept (ledger), calibration (§9)
     # ------------------------------------------------------------------
+    drift_report = None
     if not cfg.skip_backtest:
         try:
             df_feat = df.dropna(subset=feature_cols)
@@ -645,14 +647,39 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             _, html_path = write_drift_report(report, cfg.reports_dir, tag=_run_id)
             print(f"  Drift report → {html_path}"
                   f"{'  [RETRAIN RECOMMENDED]' if report['retrain_recommended'] else ''}")
+            drift_report = report
         except Exception as exc:
             logger.warning("Drift report failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
-    # Phase 6: Paper trading
+    # Phase 5h: Detailed backtest report — what this run found, persisted
+    # to reports/ so it doesn't just scroll away in the console.
+    # ------------------------------------------------------------------
+    if not cfg.skip_backtest:
+        try:
+            from src.backtest.report import build_backtest_report, write_backtest_report
+            bt_report = build_backtest_report(
+                stats=stats,
+                sensitivity_df=sens,
+                cfg=cfg,
+                oof_preds=oof_preds,
+                price_df=price_df,
+                drift_report=drift_report,
+            )
+            _, md_path = write_backtest_report(bt_report, cfg.reports_dir, tag=_run_id)
+            print(f"  Backtest report → {md_path}")
+        except Exception as exc:
+            logger.warning("Backtest report failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Phase 6: Paper trading — exits only. New positions are NEVER opened
+    # automatically by the pipeline; only a manual "Take Trade" click in the
+    # UI (app/utils/writer.open_trade) opens a position, and only at CMP
+    # during market hours. This phase just settles stop / target / horizon
+    # exits on positions that were opened that way.
     # ------------------------------------------------------------------
     if cfg.paper_trade:
-        print("\n[Phase 6] Paper trading update …")
+        print("\n[Phase 6] Paper trading — settling exits (no auto-entries) …")
         portfolio = PaperPortfolio.load(cfg.portfolio_path)
         portfolio.max_positions     = cfg.max_positions
         portfolio.position_size_pct = cfg.position_size_pct
@@ -661,11 +688,8 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
 
         closed = portfolio.update(price_df)
         if closed:
-            print(f"  Closed {len(closed)} position(s)")
-
-        opened = portfolio.add_signals(signals, price_df, cfg)
-        if opened:
-            print(f"  Opened {len(opened)} new position(s): {[t.ticker for t in opened]}")
+            print(f"  Closed {len(closed)} position(s): "
+                  f"{[(t.ticker, t.exit_reason) for t in closed]}")
 
         portfolio.print_summary(price_df)
         portfolio.save(cfg.portfolio_path)

@@ -2,14 +2,19 @@
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Literal
+
+
+def _today() -> str:
+    return date.today().isoformat()
 
 
 @dataclass
 class Config:
     # --- universe & dates ------------------------------------------------
     start: str = "2015-01-01"
-    end: str = "2025-12-31"
+    end: str = field(default_factory=_today)
 
     # --- target / label --------------------------------------------------
     horizon: int = 5                      # swing horizon in trading days

@@ -22,6 +22,7 @@ import pandas as pd
 from app.utils.env import get_supabase_url, get_supabase_key
 from src.backtest.costs import buy_leg_cost, sell_leg_cost
 from src.db.supabase_client import get_supabase_client
+from src.trading.market_hours import is_market_open, market_status_message
 from src.trading.paper_trader import PaperPortfolio
 from src.tracking.prediction_journal import sync_paper_trades, sync_ledger
 
@@ -98,25 +99,8 @@ def preview_sell(ref_price: float, shares: int, slippage_bps: float = 10.0) -> d
 # ---------------------------------------------------------------------------
 # Open / close / edit trades
 # ---------------------------------------------------------------------------
-def get_trade_price(ticker: str, fallback: Optional[float] = None) -> tuple[float, str]:
-    """Live Yahoo price to actually trade at, with a labeled fallback.
-
-    Every buy/sell should fill at the current market price, not the
-    (potentially stale) price recorded when the signal was generated.
-    Returns (price, source) where source is "live" or "fallback".
-    """
-    from app.utils.prices import fetch_latest_price
-    live = fetch_latest_price(ticker)
-    if live is not None and live > 0:
-        return float(live), "live"
-    if fallback is not None:
-        return float(fallback), "fallback"
-    raise ValueError(f"Could not fetch a live price for {ticker} and no fallback was given")
-
-
 def open_trade(
     ticker: str,
-    ref_price: float,
     shares: int,
     stop_loss: float,
     target_price: float,
@@ -125,15 +109,18 @@ def open_trade(
     opened_via: str = "manual",
     notes: str = "",
 ) -> tuple[bool, str]:
-    try:
-        fill_ref_price, price_source = get_trade_price(ticker, fallback=ref_price)
-    except ValueError as exc:
-        return False, str(exc)
+    if not is_market_open():
+        return False, f"Cannot open {ticker} — {market_status_message()}"
+
+    from app.utils.prices import fetch_latest_price
+    cmp_price = fetch_latest_price(ticker)
+    if cmp_price is None or cmp_price <= 0:
+        return False, f"Cannot open {ticker} — could not fetch a live CMP right now, try again."
 
     portfolio = PaperPortfolio.load(PORTFOLIO_PATH)
     try:
         trade = portfolio.open_manual(
-            ticker, fill_ref_price, shares, stop_loss, target_price,
+            ticker, cmp_price, shares, stop_loss, target_price,
             horizon_days, prob_up, opened_via=opened_via, notes=notes,
         )
     except ValueError as exc:
@@ -142,11 +129,10 @@ def open_trade(
     ok, sb_msg = _persist(portfolio)
     if not ok:
         return False, sb_msg
-    price_note = "" if price_source == "live" else " ⚠️ live price unavailable, used signal price"
     return True, (
-        f"Opened {ticker} × {shares} @ ₹{trade.entry_price:,.2f} "
+        f"Opened {ticker} × {shares} @ CMP ₹{trade.entry_price:,.2f} "
         f"(charges ₹{trade.entry_charges:,.2f}, breakeven ₹{trade.breakeven_price:,.2f})"
-        f"{price_note}{sb_msg}"
+        f"{sb_msg}"
     )
 
 
@@ -204,6 +190,46 @@ def auto_close_expired(price_df: pd.DataFrame) -> tuple[bool, str]:
         return False, sb_msg
     names = ", ".join(f"{t.ticker} ({t.exit_reason})" for t in closed)
     return True, f"Auto-closed {len(closed)} position(s): {names}{sb_msg}"
+
+
+def reset_portfolio(initial_capital: Optional[float] = None) -> tuple[bool, str]:
+    """Wipe every open/closed trade and ledger row, both locally and in
+    Supabase, and start a fresh account at `initial_capital` (defaults to
+    the previous account's starting capital)."""
+    old = PaperPortfolio.load(PORTFOLIO_PATH)
+    cap = initial_capital if initial_capital is not None else old.initial_capital
+
+    fresh = PaperPortfolio(
+        initial_capital=cap,
+        position_size_pct=old.position_size_pct,
+        max_positions=old.max_positions,
+        slippage_bps=old.slippage_bps,
+    )
+    try:
+        fresh.save(PORTFOLIO_PATH)
+    except Exception as exc:
+        return False, f"Local reset failed: {exc}"
+
+    client = _client()
+    sb_msg = ""
+    if client is None:
+        sb_msg = " (Supabase not configured — reset locally only)"
+    else:
+        from src.db.supabase_client import delete_all_rows
+        ok_pt = delete_all_rows(client, "paper_trades", id_col="trade_id")
+        ok_al = delete_all_rows(client, "account_ledger", id_col="id")
+        sb_msg = (
+            f" · Supabase paper_trades {'cleared' if ok_pt else 'FAILED'}, "
+            f"account_ledger {'cleared' if ok_al else 'FAILED'}"
+        )
+
+    try:
+        from app.utils.data_loader import refresh_all
+        refresh_all()
+    except Exception:
+        pass
+
+    return True, f"Portfolio reset to ₹{cap:,.0f}{sb_msg}"
 
 
 # ---------------------------------------------------------------------------

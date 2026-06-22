@@ -13,11 +13,16 @@ from app.utils.data_loader import (
 )
 from app.utils import writer
 from app.utils.prices import fetch_latest_price
+from src.trading.market_hours import is_market_open, market_status_message
 
 st.set_page_config(page_title="Trade Desk", page_icon="🎯", layout="wide")
 st.title("🎯 Trade Desk")
 st.caption("Live unrealized P&L is shown **net** of entry charges and an estimated exit-charge drag — "
            "what you'd actually keep if you closed right now.")
+st.caption(market_status_message())
+st.caption("Open positions only ever close automatically when **stop-loss**, **target**, or "
+           "**horizon expiry** is hit — those are the orders you placed when you opened the trade. "
+           "Everything else here (Close @ Market / Custom) is your manual call.")
 
 if st.button("⟳ Refresh"):
     refresh_all()

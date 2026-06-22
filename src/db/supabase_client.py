@@ -80,6 +80,49 @@ def upsert_rows(
         return False
 
 
+def update_rows(
+    client,
+    table: str,
+    values: dict[str, Any],
+    match: dict[str, Any],
+) -> bool:
+    """UPDATE `table` SET values WHERE match (all equality, AND-ed).
+
+    Use this instead of upsert_rows when the row is known to already exist
+    and you only want to patch a few columns: upsert() emits INSERT ... ON
+    CONFLICT DO UPDATE, and Postgres validates NOT NULL constraints on the
+    candidate INSERT row *before* checking the conflict — so a partial dict
+    fails even though the row exists and only an UPDATE was intended.
+    """
+    if client is None or not values or not match:
+        return False
+    try:
+        q = client.table(table).update(values)
+        for col, val in match.items():
+            q = q.eq(col, val)
+        q.execute()
+        return True
+    except Exception as exc:
+        logger.warning("update_rows(%s) failed: %s", table, exc)
+        return False
+
+
+def delete_all_rows(client, table: str, id_col: str = "id") -> bool:
+    """DELETE every row in `table`. Postgres/PostgREST requires a filter on
+    delete, so this matches every non-null id rather than truncating.
+
+    Returns True on success, False on any failure (including client=None).
+    """
+    if client is None:
+        return False
+    try:
+        client.table(table).delete().not_.is_(id_col, "null").execute()
+        return True
+    except Exception as exc:
+        logger.warning("delete_all_rows(%s) failed: %s", table, exc)
+        return False
+
+
 def fetch_rows(
     client,
     table: str,

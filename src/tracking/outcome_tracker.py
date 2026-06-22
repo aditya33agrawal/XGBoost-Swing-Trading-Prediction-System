@@ -188,8 +188,14 @@ def resolve_outcomes(
                        (pred.get("signal") == "NEUTRAL" and fwd_ret <= 0)
         outcome_date = target_date.isoformat()
 
-        # Build Supabase update for predictions row
+        # Build Supabase update for predictions row.
+        # NOTE: supabase upsert(on_conflict="id") emits INSERT ... ON CONFLICT
+        # DO UPDATE — Postgres validates NOT NULL constraints on the candidate
+        # insert row *before* checking the conflict, so a partial dict (e.g.
+        # missing run_id) raises even though the row already exists. Merge the
+        # full original row so every NOT NULL column is present.
         pred_update = {
+            **pred,
             "id":                pred_id,
             "outcome_resolved":  True,
             "outcome_date":      outcome_date,

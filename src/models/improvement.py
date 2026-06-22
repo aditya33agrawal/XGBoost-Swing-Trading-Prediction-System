@@ -132,18 +132,18 @@ def mark_deployed(
     previous_run_id: str = "",
 ) -> None:
     """Set is_deployed=True for run_id and False for previous_run_id."""
-    from src.db.supabase_client import upsert_rows
+    from src.db.supabase_client import update_rows
 
     now = datetime.utcnow().isoformat()
 
     if supabase_client:
-        upsert_rows(supabase_client, "model_runs",
-                    [{"run_id": run_id, "is_deployed": True, "deployed_at": now}],
-                    on_conflict="run_id")
+        update_rows(supabase_client, "model_runs",
+                    {"is_deployed": True, "deployed_at": now},
+                    match={"run_id": run_id})
         if previous_run_id:
-            upsert_rows(supabase_client, "model_runs",
-                        [{"run_id": previous_run_id, "is_deployed": False}],
-                        on_conflict="run_id")
+            update_rows(supabase_client, "model_runs",
+                        {"is_deployed": False},
+                        match={"run_id": previous_run_id})
 
     # JSON fallback
     fpath = Path(fallback_dir) / "model_runs.json"

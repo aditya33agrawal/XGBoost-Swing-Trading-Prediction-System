@@ -29,6 +29,21 @@ with col2:
 
 st.divider()
 
+# ── Danger zone ───────────────────────────────────────────────────────────────
+st.subheader("⚠️ Danger Zone")
+with st.expander("Reset paper portfolio"):
+    st.warning("Wipes every open/closed trade and ledger row, locally and in Supabase, "
+               "and restarts the account at the initial capital below. Cannot be undone.")
+    reset_capital = st.number_input("Initial capital (₹)", min_value=1.0, value=1_000_000.0, step=10_000.0)
+    confirm = st.checkbox("I understand this deletes all paper-trading history")
+    if st.button("Reset Portfolio", type="primary", disabled=not confirm):
+        from app.utils import writer
+        ok, msg = writer.reset_portfolio(initial_capital=reset_capital)
+        (st.success if ok else st.error)(msg)
+        st.rerun()
+
+st.divider()
+
 # ── Connection diagnostics ────────────────────────────────────────────────────
 st.subheader("Database Connection")
 

@@ -8,11 +8,15 @@ like a real NSE account rather than a frictionless backtest. Every cash
 movement is recorded in self.ledger as an immutable, broker-style funds
 statement (BUY / SELL / CHARGE / DEPOSIT / WITHDRAWAL / OPENING_BALANCE).
 
+New positions are never opened automatically — only `open_manual` /
+`PaperPortfolio.open_manual`, called from the UI's "Take Trade" button
+(app/utils/writer.open_trade), opens a position, and only at the live CMP
+during market hours (src/trading/market_hours.py).
+
 Typical flow
 ------------
     portfolio = PaperPortfolio.load(cfg.portfolio_path)
     portfolio.update(price_df)                  # close expired / stop / target
-    portfolio.add_signals(signals, price_df, cfg)   # open new LONG positions
     portfolio.print_summary(price_df)
     portfolio.save(cfg.portfolio_path)
 """
@@ -355,73 +359,6 @@ class PaperPortfolio:
                 [f"{t.ticker}({t.exit_reason})" for t in closed],
             )
         return closed
-
-    # ------------------------------------------------------------------
-    # Add signals: open new positions
-    # ------------------------------------------------------------------
-    def add_signals(
-        self,
-        signals:   pd.DataFrame,
-        price_df:  pd.DataFrame,
-        cfg,
-    ) -> list[Trade]:
-        """Open LONG positions for signals not already held."""
-        if signals.empty:
-            return []
-
-        long_signals = signals[signals["signal"] == "LONG"]
-        if long_signals.empty:
-            logger.info("No LONG signals — no new positions opened")
-            return []
-
-        open_tickers  = {t.ticker for t in self.open_trades}
-        lp            = self._latest_prices(price_df)
-        entry_date    = self._as_of_str(price_df)
-        opened: list[Trade] = []
-
-        for _, row in long_signals.iterrows():
-            if len(self.open_trades) + len(opened) >= self.max_positions:
-                logger.info("Max positions (%d) reached — skipping remaining signals", self.max_positions)
-                break
-
-            ticker = row["ticker"]
-            if ticker in open_tickers:
-                continue
-
-            price = lp.get(ticker)
-            if price is None or price <= 0:
-                logger.warning("No price for %s — skipping", ticker)
-                continue
-
-            # Position sizing: fraction of current portfolio value
-            portfolio_val = self.portfolio_value(price_df)
-            alloc  = portfolio_val * self.position_size_pct
-            shares = max(1, int(alloc // price))
-
-            stop    = float(row.get("stop_loss",    price * 0.97))
-            target  = float(row.get("target_price", price * 1.04))
-            horizon = int(row.get("horizon_days",   getattr(cfg, "horizon", 5)))
-            prob    = float(row.get("prob_up",       0.5))
-
-            try:
-                trade = self._open_position(
-                    ticker, price, shares, stop, target, horizon, prob,
-                    entry_date, opened_via="signal",
-                )
-            except ValueError as exc:
-                logger.info("  Skipping %-16s — %s", ticker, exc)
-                continue
-
-            open_tickers.add(ticker)
-            opened.append(trade)
-            logger.info(
-                "  OPEN  %-16s @ %8.2f  |  shares=%4d  |  stop=%8.2f  target=%8.2f  |  charges ₹%.0f",
-                ticker, trade.entry_price, shares, stop, target, trade.entry_charges,
-            )
-
-        if opened:
-            logger.info("Opened %d new position(s)", len(opened))
-        return opened
 
     # ------------------------------------------------------------------
     # Manual open / close (UI-driven, ad-hoc trades)
