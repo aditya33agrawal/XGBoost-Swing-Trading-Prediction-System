@@ -34,7 +34,7 @@ RNG = np.random.default_rng(42)
 # needs a nifty200_membership(symbol, start_date, end_date) table sourced
 # from NSE semi-annual reconstitution circulars (plan Phase 1.6, tracked in
 # config/universe.json). A few very recent IPOs below (e.g. GROWW, LENSKART,
-# SWIGGY, VMM, TATACAPITAL) will simply have short/NaN history pre-listing —
+# SWIGGY, VMM, TATACAP) will simply have short/NaN history pre-listing —
 # the existing dropna(feature_cols) handling already deals with that safely.
 UNIVERSE: list[str] = [
     "360ONE.NS", "ABB.NS", "ABCAPITAL.NS", "ADANIENSOL.NS", "ADANIENT.NS",
@@ -59,7 +59,7 @@ UNIVERSE: list[str] = [
     "JINDALSTEL.NS", "JIOFIN.NS", "JSWENERGY.NS", "JSWSTEEL.NS", "JUBLFOOD.NS",
     "KALYANKJIL.NS", "KEI.NS", "KOTAKBANK.NS", "KPITTECH.NS", "LAURUSLABS.NS",
     "LENSKART.NS", "LICHSGFIN.NS", "LODHA.NS", "LT.NS", "LTF.NS",
-    "LTIM.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANKIND.NS",
+    "LTM.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANKIND.NS",
     "MARICO.NS", "MARUTI.NS", "MAXHEALTH.NS", "MAZDOCK.NS", "MCDOWELL-N.NS",
     "MCX.NS", "MFSL.NS", "MOTHERSON.NS", "MOTILALOFS.NS", "MPHASIS.NS",
     "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAUKRI.NS", "NESTLEIND.NS",
@@ -71,7 +71,7 @@ UNIVERSE: list[str] = [
     "RELIANCE.NS", "RVNL.NS", "SAIL.NS", "SBICARD.NS", "SBILIFE.NS",
     "SBIN.NS", "SHREECEM.NS", "SHRIRAMFIN.NS", "SIEMENS.NS", "SOLARINDS.NS",
     "SRF.NS", "SUNPHARMA.NS", "SUPREMEIND.NS", "SUZLON.NS", "SWIGGY.NS",
-    "TATACAPITAL.NS", "TATACOMM.NS", "TATACONSUM.NS", "TATAELXSI.NS", "TATAINVEST.NS",
+    "TATACAP.NS", "TATACOMM.NS", "TATACONSUM.NS", "TATAELXSI.NS", "TATAINVEST.NS",
     "TATAPOWER.NS", "TATASTEEL.NS", "TCS.NS", "TECHM.NS", "TIINDIA.NS",
     "TITAN.NS", "TMPV.NS", "TORNTPHARM.NS", "TRENT.NS", "TVSMOTOR.NS",
     "ULTRACEMCO.NS", "UNIONBANK.NS", "UPL.NS", "VBL.NS", "VEDL.NS",
@@ -177,6 +177,11 @@ def _retry_tickers_individually(
         "GET&D.NS": ["GET&D.NS", "GVT&D.NS"],
         "LTF.NS": ["LTF.NS", "L&TFH.NS"],
         "MCDOWELL-N.NS": ["MCDOWELL-N.NS", "UNITDSPR.NS"],
+        # LTIMindtree renamed its trading symbol LTIM -> LTM on 2026-02-27
+        # (rebranded to "LTM Limited"); LTIM.NS no longer resolves.
+        "LTM.NS": ["LTM.NS", "LTIM.NS"],
+        # Tata Capital's NSE/yfinance ticker is TATACAP, not TATACAPITAL.
+        "TATACAP.NS": ["TATACAP.NS", "TATACAPITAL.NS"],
     }
 
     # First-attempt failures here are often transient rate-limiting on Yahoo's
