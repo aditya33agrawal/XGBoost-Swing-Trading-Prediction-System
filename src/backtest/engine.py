@@ -18,23 +18,35 @@ import src.backtest.costs as _costs_mod
 from src.validation.metrics import summarise
 
 
+def conviction_weights(basket: pd.DataFrame, reverse: bool = False) -> pd.Series:
+    """Per-name conviction weight within `basket`, by score-rank (plan
+    §Phase 4.19) — the most confident name gets more capital than one barely
+    past the cutoff. Shared by the vectorised backtest (`run_backtest`) and
+    the event-driven engine (`event_engine.py`) so sizing logic only lives
+    in one place.
+
+    `reverse=True` for the short basket — most-bearish (lowest score) gets
+    the highest weight there. Returned weights sum to 1 (or are empty).
+    """
+    if basket.empty:
+        return pd.Series(dtype=float)
+    # ascending=True ranks lowest pred as 1 → highest pred gets the largest
+    # rank/weight (longs); reverse=True flips it so the lowest pred (most
+    # bearish) gets the largest weight (shorts).
+    ranks = basket["pred"].rank(method="first", ascending=not reverse)
+    return ranks / ranks.sum()
+
+
 def _conviction_weighted_return(basket: pd.DataFrame, reverse: bool = False) -> float:
     """Weight each name in `basket` by its score-rank conviction *within the
     basket* instead of equal-weighting (plan §Phase 4.19) — the most
     confident name gets more capital than one barely past the cutoff. A
     cheap stand-in for full meta-labeling-based sizing (plan §3.15): same
     primary model score, just used for sizing as well as selection.
-
-    `reverse=True` for the short basket — most-bearish (lowest score) gets
-    the highest weight there.
     """
     if basket.empty:
         return 0.0
-    # ascending=True ranks lowest pred as 1 → highest pred gets the largest
-    # rank/weight (longs); reverse=True flips it so the lowest pred (most
-    # bearish) gets the largest weight (shorts).
-    ranks = basket["pred"].rank(method="first", ascending=not reverse)
-    weights = ranks / ranks.sum()
+    weights = conviction_weights(basket, reverse=reverse)
     return float((basket["fwd_ret"] * weights).sum())
 
 
@@ -142,6 +154,60 @@ def run_backtest(
     stats = summarise(r.values, periods_per_year=periods_per_year, label=cfg.mode)
     stats["equity_curve"] = equity
     stats["period_returns"] = r
+    return stats
+
+
+# ---------------------------------------------------------------------------
+# Horizon-bucketed sleeves (docs/dynamic-horizon-rr-plan.md Phase 4 item 16)
+# — the cheap "does variable horizon help" check, built entirely on the
+# existing vectorised `run_backtest`: discretise horizon_star into the grid
+# buckets, run the unmodified backtest once per bucket, then combine equity
+# curves by capital allocation. Does NOT see stop/target (that needs the
+# full event_engine) — only validates the horizon-selection signal.
+# ---------------------------------------------------------------------------
+def run_backtest_bucketed_sleeves(
+    oof_preds: pd.DataFrame,
+    cfg,
+    rt_cost_override: float | None = None,
+) -> dict:
+    """Run `run_backtest` once per horizon bucket in `oof_preds["horizon_star"]`,
+    then combine the per-bucket equity curves into one capital-weighted curve.
+
+    Requires `oof_preds` to carry `horizon_star` (from
+    `_walk_forward_predict_surface`). Capital is split equally across the
+    buckets that actually produced tradable periods.
+    """
+    if "horizon_star" not in oof_preds.columns:
+        return {"error": "oof_preds missing 'horizon_star' — run with cfg.dynamic_horizon_enabled"}
+
+    buckets = sorted(oof_preds["horizon_star"].dropna().unique())
+    sleeve_stats: dict[int, dict] = {}
+    for h in buckets:
+        bucket_df = oof_preds[oof_preds["horizon_star"] == h]
+        result = run_backtest(bucket_df, cfg, rt_cost_override=rt_cost_override)
+        if "error" not in result and "period_returns" in result:
+            sleeve_stats[int(h)] = result
+
+    if not sleeve_stats:
+        return {"error": "no bucket produced a tradable backtest"}
+
+    # Equal capital allocation across sleeves that traded; combine daily by
+    # reindexing each sleeve's return series onto the union of dates (0 return
+    # on days a given sleeve didn't trade) and averaging.
+    n_sleeves = len(sleeve_stats)
+    all_dates = sorted(set().union(*(s["period_returns"].index for s in sleeve_stats.values())))
+    combined = pd.Series(0.0, index=pd.Index(all_dates))
+    for h, s in sleeve_stats.items():
+        r = s["period_returns"].reindex(all_dates, fill_value=0.0)
+        combined = combined.add(r / n_sleeves, fill_value=0.0)
+
+    equity = (1 + combined).cumprod()
+    periods_per_year = 252.0 / cfg.rebalance_every
+    stats = summarise(combined.values, periods_per_year=periods_per_year, label=f"{cfg.mode}_sleeves")
+    stats["equity_curve"] = equity
+    stats["period_returns"] = combined
+    stats["sleeve_stats"] = {h: {k: v for k, v in s.items() if k not in ("equity_curve", "period_returns")}
+                              for h, s in sleeve_stats.items()}
     return stats
 
 

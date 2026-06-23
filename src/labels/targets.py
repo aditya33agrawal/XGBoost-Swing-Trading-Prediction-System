@@ -29,6 +29,23 @@ def forward_log_return(df: pd.DataFrame, h: int) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Multi-horizon forward log-returns (dynamic-horizon-rr-plan.md Phase 1)
+# ---------------------------------------------------------------------------
+def forward_log_return_grid(df: pd.DataFrame, grid: list[int]) -> pd.DataFrame:
+    """Add one `fwd_ret_{h}` column per horizon in `grid`.
+
+    Each column is computed with the same logic as `forward_log_return(df, h)`
+    — last `h` rows per ticker are NaN for that column. Used to train one
+    quantile head per horizon without re-deriving the label math per-h.
+    """
+    df = df.sort_values(["ticker", "date"]).copy()
+    close_by_ticker = df.groupby("ticker")["close"]
+    for h in grid:
+        df[f"fwd_ret_{h}"] = close_by_ticker.transform(lambda s, h=h: np.log(s.shift(-h) / s))
+    return df
+
+
+# ---------------------------------------------------------------------------
 # 2. Triple-barrier label (classification)
 # ---------------------------------------------------------------------------
 def triple_barrier_labels(
@@ -36,6 +53,7 @@ def triple_barrier_labels(
     h: int,
     up_mult: float = 2.0,
     dn_mult: float = 2.0,
+    record_first_passage: bool = False,
 ) -> pd.DataFrame:
     """Add column `tb_label` ∈ {+1, -1, 0} and `fwd_ret`.
 
@@ -46,6 +64,14 @@ def triple_barrier_labels(
        0  vertical barrier (time limit)
 
     Last `h` rows per ticker will be NaN.
+
+    When `record_first_passage=True`, also emits:
+      tb_first_passage_time — bars until whichever barrier hit (1..h), or h
+                               if the vertical barrier fired (no early hit).
+      tb_barrier_hit        — "up" | "down" | "vertical".
+    Used for Design B/C cross-checks and horizon diagnostics
+    (docs/dynamic-horizon-rr-plan.md §1 Design B/C); does not change the
+    existing tb_label/fwd_ret contract when left False.
     """
     df = df.sort_values(["ticker", "date"]).copy()
     df = forward_log_return(df, h)  # also compute fwd_ret
@@ -74,6 +100,8 @@ def triple_barrier_labels(
         atr = _ewm_mean(tr, span=14)
 
         labels = np.full(n, np.nan)
+        fpt = np.full(n, np.nan)
+        hit = np.full(n, None, dtype=object)
         for i in range(n - h):
             upper = c[i] + up_mult * atr[i]
             lower = c[i] - dn_mult * atr[i]
@@ -88,13 +116,22 @@ def triple_barrier_labels(
 
             if t_up == n and t_dn == n:
                 labels[i] = 0
+                fpt[i] = h
+                hit[i] = "vertical"
             elif t_up <= t_dn:
                 labels[i] = 1
+                fpt[i] = t_up + 1
+                hit[i] = "up"
             else:
                 labels[i] = -1
+                fpt[i] = t_dn + 1
+                hit[i] = "down"
 
         grp = grp.copy()
         grp["tb_label"] = labels
+        if record_first_passage:
+            grp["tb_first_passage_time"] = fpt
+            grp["tb_barrier_hit"] = hit
         all_labels.append(grp)
 
     result = pd.concat(all_labels, ignore_index=True)

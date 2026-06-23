@@ -31,13 +31,16 @@ from src.data.ingestion import fetch_prices, fetch_index_prices, UNIVERSE
 from src.data.storage import init_db, upsert_prices, upsert_index, load_prices, save_parquet
 from src.data.validation import run_all_gates, DataQualityError
 from src.features.engineer import build_features
-from src.labels.targets import add_labels
+from src.labels.targets import add_labels, forward_log_return_grid
 from src.labels.weights import sample_weights
 from src.models.trainer import (
     train_xgb, train_xgb_bag, predict_bag, tune_hyperparameters, fit_final_model,
     _BASE_PARAMS_CLF, _BASE_PARAMS_REG, _get_xgb,
     set_device, apply_device, get_device,
+    train_quantile_surface, predict_surface, _QUANTILE_BASE_PARAMS,
+    train_quantile_model_no_es,
 )
+from src.models.horizon_selection import select_horizon, diagnose_horizon_distribution
 from src.models.calibration import TimeOrderedCalibrator
 from src.validation.walk_forward import PurgedWalkForward
 from src.validation.metrics import (
@@ -231,6 +234,147 @@ def _walk_forward_predict(
 
 
 # ---------------------------------------------------------------------------
+# Walk-forward loop, dynamic-horizon variant (docs/dynamic-horizon-rr-plan.md
+# Phase 2). Only called when cfg.dynamic_horizon_enabled — trains one quantile
+# surface (horizon_grid x quantile_taus) per rebalance step instead of one
+# scalar model, picks h* per (date, ticker) via select_horizon, and emits a
+# frame shaped like _walk_forward_predict's output (pred/fwd_ret) so every
+# downstream consumer (run_backtest, daily_information_coefficient, ...)
+# works unchanged: `fwd_ret` here is the realised return at the *chosen*
+# horizon, not a fixed cfg.horizon.
+# ---------------------------------------------------------------------------
+def _walk_forward_predict_surface(
+    df: pd.DataFrame,
+    feature_cols: list[str],
+    cfg: Config,
+    best_params: dict,
+) -> pd.DataFrame:
+    grid = list(cfg.horizon_grid)
+    h_max = max(grid)
+    taus = tuple(cfg.quantile_taus)
+    fwd_cols = [f"fwd_ret_{h}" for h in grid]
+
+    dates = np.sort(df["date"].unique())
+    all_preds = []
+
+    # Purge/embargo must use max(grid), not the legacy cfg.horizon — the A1
+    # leakage-budget cost the plan calls out explicitly (Phase 1 item 4).
+    rebal_points = list(range(cfg.train_min_days, len(dates) - h_max, cfg.rebalance_every))
+    n_steps = len(rebal_points)
+    logger.info(
+        "Walk-forward (dynamic horizon): %d rebalance steps, grid=%s, taus=%s",
+        n_steps, grid, taus,
+    )
+    t_wf = time.time()
+
+    for step, i in enumerate(rebal_points):
+        rebal_date = dates[i]
+        cutoff_date = dates[max(0, i - cfg.embargo - h_max)]
+        val_cutoff = dates[max(0, i - cfg.embargo - h_max - cfg.wf_es_val_days)]
+
+        train_mask = df["date"] <= cutoff_date
+        test_mask = df["date"] == rebal_date
+        val_mask = (df["date"] > val_cutoff) & (df["date"] <= cutoff_date)
+
+        test_df = df[test_mask].dropna(subset=feature_cols)
+        if test_df.empty:
+            continue
+
+        # Build per-horizon train/val slices — each quantile head trains
+        # against its own fwd_ret_{h} column, dropping rows unlabeled at
+        # that horizon (the legacy single-horizon dropna pattern, repeated
+        # per h rather than mixed across horizons in one frame).
+        y_train_by_h, y_val_by_h, sw_by_h = {}, {}, {}
+        train_idx_ref = val_idx_ref = None
+        ok = True
+        for h in grid:
+            col = f"fwd_ret_{h}"
+            tr = df[train_mask].dropna(subset=feature_cols + [col])
+            vl = df[val_mask].dropna(subset=feature_cols + [col])
+            if len(tr) < cfg.train_min_days or vl.empty:
+                ok = False
+                break
+            if train_idx_ref is None:
+                train_idx_ref, val_idx_ref = tr, vl
+            y_train_by_h[h] = tr[col]
+            y_val_by_h[h] = vl[col]
+            sw_by_h[h] = sample_weights(tr, h, label_col=col)
+        if not ok:
+            continue
+
+        X_tr = train_idx_ref[feature_cols]
+        X_vl = val_idx_ref[feature_cols]
+        X_te = test_df[feature_cols]
+
+        try:
+            surface_models = train_quantile_surface(
+                X_tr, y_train_by_h, X_vl, y_val_by_h, taus,
+                params=_QUANTILE_BASE_PARAMS,
+                sample_weight_by_h=sw_by_h,
+                early_stopping=cfg.xgb_early_stopping,
+                n_seeds=cfg.quantile_ensemble_size,
+            )
+        except Exception as e:
+            logger.warning("quantile surface training failed at %s: %s", rebal_date, e)
+            continue
+
+        # Degenerate-fold skip (mirrors _walk_forward_predict): drop any cell
+        # where every bag member landed on best_iteration==0.
+        usable = {}
+        for key, models in surface_models.items():
+            best_iters = [getattr(m, "best_iteration", None) for m in models]
+            kept = [m for m, bi in zip(models, best_iters) if not (bi is not None and bi == 0)]
+            if kept:
+                usable[key] = kept
+        if len(usable) < len(grid) * len(taus):
+            logger.warning("skipping fold %s — degenerate quantile cell(s) (sparse train)", rebal_date)
+            continue
+
+        surface_pred = predict_surface(usable, X_te)
+        h_star, score_star, q_star = select_horizon(
+            surface_pred, grid, taus=taus,
+            lambda_t=cfg.horizon_lambda_t, h_max=cfg.horizon_h_max,
+        )
+
+        # Gather the realised return at each row's own chosen horizon.
+        fwd_at_h = test_df[fwd_cols].to_numpy()
+        h_to_col_idx = {h: j for j, h in enumerate(grid)}
+        col_idx = np.array([h_to_col_idx[h] for h in h_star])
+        fwd_ret_hstar = fwd_at_h[np.arange(len(h_star)), col_idx]
+
+        pred_cols = ["date", "ticker"]
+        if cfg.regime_sma_col in test_df.columns:
+            pred_cols.append(cfg.regime_sma_col)
+        pred_df = test_df[pred_cols].copy()
+        pred_df["pred"] = score_star
+        pred_df["fwd_ret"] = fwd_ret_hstar
+        pred_df["horizon_star"] = h_star
+        pred_df["q10_star"] = q_star["q10"]
+        pred_df["q50_star"] = q_star["q50"]
+        pred_df["q90_star"] = q_star["q90"]
+        all_preds.append(pred_df)
+
+        if step % 10 == 0 or step == n_steps - 1:
+            elapsed = time.time() - t_wf
+            rate = elapsed / (step + 1)
+            eta = rate * (n_steps - step - 1)
+            logger.info(
+                "  step %3d/%d | %s | ETA %.0fs",
+                step + 1, n_steps, pd.Timestamp(rebal_date).date(), eta,
+            )
+
+    logger.info("Walk-forward (dynamic horizon) done in %.1fs", time.time() - t_wf)
+    result = pd.concat(all_preds, ignore_index=True) if all_preds else pd.DataFrame()
+    if not result.empty:
+        diag = diagnose_horizon_distribution(result["horizon_star"].to_numpy(), grid)
+        logger.info("h* distribution: %s%s%s",
+                     diag["fractions"],
+                     "  [COLLAPSED]" if diag["collapsed"] else "",
+                     "  [LOOKS UNIFORM/NOISE]" if diag["looks_uniform"] else "")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Latest-bar signal generation
 # ---------------------------------------------------------------------------
 def predict_latest(
@@ -319,6 +463,74 @@ def predict_latest(
 
 
 # ---------------------------------------------------------------------------
+# Latest-bar signal generation, dynamic-horizon variant. Trains the quantile
+# surface on all labeled data (one head per horizon_grid x quantile_taus cell,
+# fixed n_estimators / no early stopping — same rationale as predict_latest's
+# params_no_es path), scores the latest date, and returns per-ticker
+# horizon_days=h* plus q10_star/q90_star for Phase 3's dynamic RR.
+# ---------------------------------------------------------------------------
+def predict_latest_surface(
+    df_full: pd.DataFrame,
+    feature_cols: list[str],
+    cfg: Config,
+    top_n: int = 10,
+    return_model: bool = False,
+):
+    grid = list(cfg.horizon_grid)
+    taus = tuple(cfg.quantile_taus)
+    fwd_cols = [f"fwd_ret_{h}" for h in grid]
+
+    latest_date = df_full["date"].max()
+    latest_df = df_full[df_full["date"] == latest_date].dropna(subset=feature_cols)
+    if latest_df.empty:
+        empty = pd.DataFrame(columns=["ticker", "score", "signal"])
+        return (empty, None) if return_model else empty
+
+    surface_models: dict[tuple[int, float], list] = {}
+    for h in grid:
+        col = f"fwd_ret_{h}"
+        df_train = df_full.dropna(subset=feature_cols + [col])
+        if df_train.empty:
+            empty = pd.DataFrame(columns=["ticker", "score", "signal"])
+            return (empty, None) if return_model else empty
+        sw_h = sample_weights(df_train, h, label_col=col)
+        for tau in taus:
+            model = train_quantile_model_no_es(
+                df_train[feature_cols], df_train[col], tau,
+                params=_QUANTILE_BASE_PARAMS, sample_weight=sw_h,
+            )
+            surface_models[(h, tau)] = [model]
+
+    surface_pred = predict_surface(surface_models, latest_df[feature_cols])
+    h_star, score_star, q_star = select_horizon(
+        surface_pred, grid, taus=taus,
+        lambda_t=cfg.horizon_lambda_t, h_max=cfg.horizon_h_max,
+    )
+
+    out = latest_df[["ticker"]].copy()
+    out["pred_return"] = score_star
+    out["horizon_days"] = h_star
+    out["q10_star"] = q_star["q10"]
+    out["q50_star"] = q_star["q50"]
+    out["q90_star"] = q_star["q90"]
+    out = out.sort_values("pred_return", ascending=False).reset_index(drop=True)
+
+    n = len(out)
+    n_long = max(1, n // cfg.n_quantile) if n else 0
+    out["signal"] = "NEUTRAL"
+    if n_long:
+        out.iloc[:n_long, out.columns.get_loc("signal")] = "LONG"
+
+    if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
+        regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
+        if regime_val < 0:
+            out["signal"] = "NEUTRAL"
+
+    result = out.head(top_n)
+    return (result, surface_models) if return_model else result
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
@@ -382,7 +594,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     print("\n[Phase 1b] Validation gates …")
     try:
-        price_df = run_all_gates(price_df)
+        price_df = run_all_gates(price_df, end=cfg.end)
     except DataQualityError as e:
         print(f"  ABORTED: {e}")
         raise
@@ -409,6 +621,13 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     task = "classification" if cfg.label_type == "triple_barrier" else "regression"
     df = add_labels(df, cfg.horizon, cfg.label_type)
     target_col = "target"
+
+    # Dynamic-horizon surface (docs/dynamic-horizon-rr-plan.md Phase 1) — adds
+    # fwd_ret_{h} per h in cfg.horizon_grid alongside the legacy `target`/
+    # `fwd_ret` columns above. Purely additive; inert unless the flag is on.
+    if cfg.dynamic_horizon_enabled:
+        df = forward_log_return_grid(df, cfg.horizon_grid)
+        print(f"  multi-horizon labels added for grid={cfg.horizon_grid}")
 
     # Keep df_full (features for ALL dates, including last horizon bars which have
     # no valid label) so predict_latest can score the actual latest price date.
@@ -510,8 +729,12 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     if cfg.skip_backtest:
         print("\n[Phase 4] Walk-forward skipped (--fast-signals mode)")
     else:
-        print("\n[Phase 4] Walk-forward prediction loop …")
-        oof_preds = _walk_forward_predict(df, feature_cols, target_col, cfg, task, sw, best_params)
+        if cfg.dynamic_horizon_enabled:
+            print("\n[Phase 4] Walk-forward prediction loop (dynamic horizon) …")
+            oof_preds = _walk_forward_predict_surface(df, feature_cols, cfg, best_params)
+        else:
+            print("\n[Phase 4] Walk-forward prediction loop …")
+            oof_preds = _walk_forward_predict(df, feature_cols, target_col, cfg, task, sw, best_params)
         n_dates = oof_preds["date"].nunique() if not oof_preds.empty else 0
         print(f"  generated predictions for {n_dates} dates")
 
@@ -573,18 +796,23 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # Phase 5: Latest signals
     # ------------------------------------------------------------------
     print("\n[Phase 5] Generating latest signals …")
-    signals, final_model = predict_latest(
-        df_labeled=df,
-        df_full=df_full,
-        feature_cols=feature_cols,
-        target_col=target_col,
-        cfg=cfg,
-        task=task,
-        sw=sw,
-        best_params=best_params,
-        calibrator=calibrator,
-        return_model=True,
-    )
+    if cfg.dynamic_horizon_enabled:
+        signals, final_model = predict_latest_surface(
+            df_full=df_full, feature_cols=feature_cols, cfg=cfg, return_model=True,
+        )
+    else:
+        signals, final_model = predict_latest(
+            df_labeled=df,
+            df_full=df_full,
+            feature_cols=feature_cols,
+            target_col=target_col,
+            cfg=cfg,
+            task=task,
+            sw=sw,
+            best_params=best_params,
+            calibrator=calibrator,
+            return_model=True,
+        )
 
     # Phase 5b: Enrich with ATR-based entry / stop / target levels
     if not signals.empty:
@@ -643,9 +871,12 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
                 "hit_rate":     stats.get("hit_rate"),
                 "calib_err":    None if (_oos_ece != _oos_ece) else _oos_ece,
             }
+            # final_model is a {(h,tau): [model,...]} dict in the dynamic-horizon
+            # branch (predict_latest_surface) — no single scalar model to save.
+            is_surface = cfg.dynamic_horizon_enabled and isinstance(final_model, dict)
             bundle_dir = save_bundle(
                 cfg.registry_root,
-                model=final_model,
+                model=None if is_surface else final_model,
                 calibrator=calibrator,
                 features=feature_cols,
                 hyperparams=best_params,
@@ -656,6 +887,14 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
                 model_version=_run_id,
                 label_type=cfg.label_type,
                 task=task,
+                quantile_surface=final_model if is_surface else None,
+                dynamic_horizon_config={
+                    "horizon_grid": cfg.horizon_grid,
+                    "quantile_taus": cfg.quantile_taus,
+                    "rr_k": cfg.rr_k,
+                    "stop_atr_clamp": list(cfg.stop_atr_clamp),
+                    "target_atr_clamp": list(cfg.target_atr_clamp),
+                } if cfg.dynamic_horizon_enabled else None,
             )
             print(f"  Model bundle saved → {bundle_dir}")
             prune_old_bundles(cfg.registry_root, keep=cfg.keep_bundles)

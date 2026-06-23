@@ -110,6 +110,18 @@ def _save_local_outcomes(outcomes: list[dict], fallback_dir: str) -> None:
 # ---------------------------------------------------------------------------
 # 1. Resolve outcomes
 # ---------------------------------------------------------------------------
+def _pred_horizon(pred: dict, default_horizon_days: int) -> int:
+    """Per-prediction horizon (docs/dynamic-horizon-rr-plan.md Phase 5 item 19) —
+    each saved prediction carries its own `horizon_days` once dynamic horizon
+    is enabled (signals.py::enrich_signals); fall back to the function-level
+    default for legacy rows saved before that field existed."""
+    h = pred.get("horizon_days")
+    try:
+        return int(h) if h is not None else int(default_horizon_days)
+    except (TypeError, ValueError):
+        return int(default_horizon_days)
+
+
 def resolve_outcomes(
     price_df: pd.DataFrame,
     supabase_client,
@@ -118,14 +130,23 @@ def resolve_outcomes(
 ) -> int:
     """Resolve predictions whose horizon has elapsed.
 
-    Finds unresolved predictions with signal_date <= today - horizon_days.
-    For each: fetches actual close, computes return, updates predictions +
-    inserts an outcomes row.
+    Finds unresolved predictions with signal_date <= today - horizon_days,
+    using each prediction's own `horizon_days` field when present (so a
+    dynamic-horizon prediction with horizon_days=63 isn't resolved after only
+    a few days) and falling back to the `horizon_days` parameter for legacy
+    rows that predate that field. For each: fetches actual close, computes
+    return, updates predictions + inserts an outcomes row.
 
     Returns count of newly resolved predictions.
     """
     today = date.today()
-    cutoff = today - timedelta(days=horizon_days + 2)   # +2 for weekends buffer
+
+    def _is_due(pred: dict) -> bool:
+        sd = _to_date(pred.get("signal_date"))
+        if sd is None:
+            return False
+        h = _pred_horizon(pred, horizon_days)
+        return sd <= today - timedelta(days=h + 2)   # +2 for weekends buffer
 
     # ---- Load unresolved predictions ------------------------------------
     if supabase_client:
@@ -133,25 +154,19 @@ def resolve_outcomes(
             supabase_client, "predictions",
             filters={"outcome_resolved": False},
         )
-        unresolved = [
-            r for r in raw
-            if _to_date(r.get("signal_date")) is not None
-            and _to_date(r["signal_date"]) <= cutoff
-        ]
+        unresolved = [r for r in raw if _is_due(r)]
     else:
         all_preds = _load_local_predictions(fallback_dir)
         unresolved = [
             p for p in all_preds
-            if not p.get("outcome_resolved", False)
-            and _to_date(p.get("signal_date")) is not None
-            and _to_date(p["signal_date"]) <= cutoff
+            if not p.get("outcome_resolved", False) and _is_due(p)
         ]
 
     if not unresolved:
         logger.info("No unresolved predictions to settle")
         return 0
 
-    logger.info("Resolving %d predictions (cutoff %s) …", len(unresolved), cutoff)
+    logger.info("Resolving %d predictions …", len(unresolved))
 
     # ---- Build price look-up -------------------------------------------
     lookup = _build_price_lookup(price_df)
@@ -164,7 +179,8 @@ def resolve_outcomes(
 
     for pred in unresolved:
         signal_date  = _to_date(pred["signal_date"])
-        target_date  = signal_date + timedelta(days=horizon_days + 2)  # approx h trading days
+        pred_horizon = _pred_horizon(pred, horizon_days)
+        target_date  = signal_date + timedelta(days=pred_horizon + 2)  # approx h trading days
         ticker       = pred["ticker"]
         entry_price  = pred.get("entry_price") or 0.0
         stop_loss    = pred.get("stop_loss") or 0.0
@@ -174,7 +190,7 @@ def resolve_outcomes(
 
         actual_close = _nearest_close_after(ticker, target_date, lookup, max_search=5)
         if actual_close is None:
-            logger.debug("No price found for %s @ %s+%d", ticker, signal_date, horizon_days)
+            logger.debug("No price found for %s @ %s+%d", ticker, signal_date, pred_horizon)
             continue
 
         # Check intraday barriers using min/max over the horizon window

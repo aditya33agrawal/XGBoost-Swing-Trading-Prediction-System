@@ -152,7 +152,7 @@ def build_manifest(
 def save_bundle(
     root: str,
     *,
-    model,
+    model=None,
     calibrator,
     features: list[str],
     hyperparams: dict,
@@ -164,11 +164,22 @@ def save_bundle(
     label_type: str = "triple_barrier",
     task: str = "classification",
     quantile_model=None,
+    quantile_surface: dict | None = None,
+    dynamic_horizon_config: dict | None = None,
 ) -> str:
     """Persist a model bundle under ``root/registry/bundles/model_<version>/``.
 
     ``model`` is an xgboost sklearn estimator (XGBClassifier/XGBRegressor) saved via
-    native ``save_model`` to ``model.json`` — portable and version-robust.
+    native ``save_model`` to ``model.json`` — portable and version-robust. May be
+    ``None`` when the run is dynamic-horizon-only (``quantile_surface`` populated
+    instead) — there is no single scalar production model in that case.
+
+    ``quantile_surface`` (docs/dynamic-horizon-rr-plan.md Phase 5 item 20) is an
+    optional ``{(h, tau): [booster, ...]}`` dict — one bagged ensemble per
+    horizon/tau cell — persisted as ``quantile_h{h}_tau{tau}_seed{i}.json`` files
+    plus a ``quantile_surface.json`` index so a bundle stays fully reproducible
+    even though the surface is many boosters, not one.
+
     Returns the bundle directory path.
     """
     version = model_version or datetime.today().strftime("%Y%m%d")
@@ -176,7 +187,8 @@ def save_bundle(
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. booster — native JSON, never pickle (and never the brittle sklearn wrapper)
-    _as_booster(model).save_model(str(bundle_dir / "model.json"))
+    if model is not None:
+        _as_booster(model).save_model(str(bundle_dir / "model.json"))
 
     # 2. calibrator — small sklearn/isotonic object; joblib is fine here
     if calibrator is not None:
@@ -192,6 +204,20 @@ def save_bundle(
             _as_booster(quantile_model).save_model(str(bundle_dir / "quantile_reg.json"))
         except Exception as exc:
             logger.warning("Could not save quantile model: %s", exc)
+
+    # 3b. optional quantile surface (dynamic-horizon-rr-plan.md Phase 5)
+    surface_index: list[dict] = []
+    if quantile_surface:
+        for (h, tau), boosters in quantile_surface.items():
+            for i, booster in enumerate(boosters):
+                key = f"h{h}_tau{tau}_seed{i}"
+                try:
+                    _as_booster(booster).save_model(str(bundle_dir / f"quantile_{key}.json"))
+                    surface_index.append({"h": h, "tau": tau, "seed": i, "key": key})
+                except Exception as exc:
+                    logger.warning("Could not save quantile surface cell %s: %s", key, exc)
+    if surface_index:
+        _atomic_write_json(bundle_dir / "quantile_surface.json", {"cells": surface_index})
 
     # 4. features (ordered — order matters for inference)
     _atomic_write_json(bundle_dir / "features.json", {
@@ -214,6 +240,8 @@ def save_bundle(
         label_type=label_type,
     )
     manifest["task"] = task
+    if dynamic_horizon_config:
+        manifest["dynamic_horizon"] = dynamic_horizon_config
     _atomic_write_json(bundle_dir / "manifest.json", manifest)
 
     logger.info("Saved model bundle → %s", bundle_dir)
@@ -221,25 +249,29 @@ def save_bundle(
 
 
 def load_bundle(bundle_dir: str, task: str | None = None):
-    """Load a bundle into ``{model, calibrator, features, manifest, metrics}``.
+    """Load a bundle into ``{model, calibrator, features, manifest, metrics,
+    quantile_surface}``.
 
     ``model`` is a :class:`BundleModel` wrapping the native booster — it exposes
     ``predict`` / ``predict_proba`` regardless of xgboost version. ``task`` is read
-    from the manifest unless overridden.
+    from the manifest unless overridden. ``model`` is ``None`` for a
+    dynamic-horizon-only bundle that has no single scalar model (see
+    ``quantile_surface`` instead — a ``{(h, tau): [BundleModel, ...]}`` dict,
+    empty if the bundle predates dynamic horizon or wasn't saved with one).
     """
     bd = Path(bundle_dir)
-    if not (bd / "model.json").exists():
-        raise FileNotFoundError(f"No model.json in {bundle_dir}")
-
     manifest = json.loads((bd / "manifest.json").read_text()) if (bd / "manifest.json").exists() else {}
     feats_blob = json.loads((bd / "features.json").read_text()) if (bd / "features.json").exists() else {}
     features = feats_blob.get("features", [])
     task = task or manifest.get("task", "classification")
 
     import xgboost as xgb
-    booster = xgb.Booster()
-    booster.load_model(str(bd / "model.json"))
-    model = BundleModel(booster, features, task=task)
+
+    model = None
+    if (bd / "model.json").exists():
+        booster = xgb.Booster()
+        booster.load_model(str(bd / "model.json"))
+        model = BundleModel(booster, features, task=task)
 
     calibrator = None
     cal_path = bd / "calibrator.pkl"
@@ -250,6 +282,24 @@ def load_bundle(bundle_dir: str, task: str | None = None):
         except Exception as exc:
             logger.warning("Could not load calibrator: %s", exc)
 
+    quantile_surface: dict[tuple[int, float], list] = {}
+    surf_index_path = bd / "quantile_surface.json"
+    if surf_index_path.exists():
+        cells = json.loads(surf_index_path.read_text()).get("cells", [])
+        grouped: dict[tuple[int, float], list] = {}
+        for cell in cells:
+            key, h, tau = cell["key"], cell["h"], cell["tau"]
+            model_path = bd / f"quantile_{key}.json"
+            if not model_path.exists():
+                continue
+            qb = xgb.Booster()
+            qb.load_model(str(model_path))
+            grouped.setdefault((h, tau), []).append(BundleModel(qb, features, task="regression"))
+        quantile_surface = grouped
+
+    if model is None and not quantile_surface:
+        raise FileNotFoundError(f"No model.json or quantile surface in {bundle_dir}")
+
     metrics = json.loads((bd / "metrics.json").read_text()) if (bd / "metrics.json").exists() else {}
 
     return {
@@ -258,6 +308,7 @@ def load_bundle(bundle_dir: str, task: str | None = None):
         "features": features,
         "manifest": manifest,
         "metrics": metrics,
+        "quantile_surface": quantile_surface,
         "bundle_dir": str(bd),
     }
 

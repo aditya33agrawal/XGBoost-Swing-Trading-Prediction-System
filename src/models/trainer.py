@@ -199,6 +199,128 @@ def predict_bag(models: list, X: pd.DataFrame, task: str = "classification") -> 
 
 
 # ---------------------------------------------------------------------------
+# Quantile regression heads (docs/dynamic-horizon-rr-plan.md Phase 2) —
+# one head per (horizon, tau) cell, trained with XGBoost's native pinball-loss
+# objective. Mirrors train_xgb/train_xgb_bag's structure so the rest of the
+# walk-forward plumbing (device handling, early stopping) is reused as-is.
+# ---------------------------------------------------------------------------
+_QUANTILE_BASE_PARAMS = {
+    "objective": "reg:quantileerror",
+    "n_estimators": 400,
+    "learning_rate": 0.02,
+    "max_depth": 4,
+    "min_child_weight": 5,
+    "subsample": 0.8,
+    "colsample_bytree": 0.7,
+    "gamma": 0.5,
+    "reg_lambda": 2.0,
+    "reg_alpha": 0.5,
+    "tree_method": "hist",
+    "random_state": 42,
+    "verbosity": 0,
+}
+
+
+def train_quantile_model(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_val: pd.DataFrame,
+    y_val: pd.Series,
+    tau: float,
+    params: dict | None = None,
+    sample_weight: np.ndarray | None = None,
+    early_stopping: int = 50,
+) -> Any:
+    """Train a single XGBoost quantile regressor at quantile `tau`."""
+    xgb = _get_xgb()
+    p = dict(params) if params else dict(_QUANTILE_BASE_PARAMS)
+    # Strip params that don't apply to the quantile objective / aren't model knobs.
+    for k in ("objective", "eval_metric", "early_stopping_rounds"):
+        p.pop(k, None)
+    p["objective"] = "reg:quantileerror"
+    p["quantile_alpha"] = tau
+    p = _with_device(p)
+
+    model = xgb.XGBRegressor(**p)
+    model.set_params(early_stopping_rounds=early_stopping)
+    model.fit(
+        X_train, y_train,
+        sample_weight=sample_weight,
+        eval_set=[(X_val, y_val)],
+        verbose=False,
+    )
+    return model
+
+
+def train_quantile_surface(
+    X_train: pd.DataFrame,
+    y_train_by_h: dict[int, pd.Series],
+    X_val: pd.DataFrame,
+    y_val_by_h: dict[int, pd.Series],
+    taus: list[float],
+    params: dict | None = None,
+    sample_weight_by_h: dict[int, np.ndarray] | None = None,
+    early_stopping: int = 50,
+    n_seeds: int = 1,
+    base_seed: int = 42,
+) -> dict[tuple[int, float], list]:
+    """Train one bagged quantile-head ensemble per (horizon, tau) cell.
+
+    Returns {(h, tau): [model, ...]} — `n_seeds` models per cell, average
+    with `predict_surface` rather than trusting a single fit.
+    """
+    surface: dict[tuple[int, float], list] = {}
+    for h, y_tr in y_train_by_h.items():
+        y_vl = y_val_by_h[h]
+        sw = sample_weight_by_h.get(h) if sample_weight_by_h else None
+        for tau in taus:
+            models = []
+            for i in range(max(1, n_seeds)):
+                seed_params = dict(params) if params else dict(_QUANTILE_BASE_PARAMS)
+                seed_params["random_state"] = base_seed + i
+                models.append(
+                    train_quantile_model(
+                        X_train, y_tr, X_val, y_vl, tau,
+                        params=seed_params, sample_weight=sw,
+                        early_stopping=early_stopping,
+                    )
+                )
+            surface[(h, tau)] = models
+    return surface
+
+
+def train_quantile_model_no_es(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    tau: float,
+    params: dict | None = None,
+    sample_weight: np.ndarray | None = None,
+) -> Any:
+    """Final-model quantile fit with no early stopping (mirrors predict_latest's
+    fixed-n_estimators pattern for the classifier/regressor — a small val window
+    here would collapse the model the same way it does for the scalar score)."""
+    xgb = _get_xgb()
+    p = dict(params) if params else dict(_QUANTILE_BASE_PARAMS)
+    for k in ("objective", "eval_metric", "early_stopping_rounds"):
+        p.pop(k, None)
+    p["objective"] = "reg:quantileerror"
+    p["quantile_alpha"] = tau
+    p = _with_device(p)
+    model = xgb.XGBRegressor(**p)
+    model.fit(X_train, y_train, sample_weight=sample_weight, verbose=False)
+    return model
+
+
+def predict_surface(surface: dict[tuple[int, float], list], X: pd.DataFrame) -> dict[tuple[int, float], np.ndarray]:
+    """Average each (h, tau) cell's bagged predictions on `X`."""
+    out = {}
+    for key, models in surface.items():
+        preds = np.stack([m.predict(X) for m in models], axis=0)
+        out[key] = preds.mean(axis=0)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Optuna hyperparameter search
 # ---------------------------------------------------------------------------
 def _optuna_objective(

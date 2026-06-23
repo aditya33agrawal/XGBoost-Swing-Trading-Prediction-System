@@ -64,6 +64,28 @@ def check_no_future_leak(
         )
 
 
+def check_freshness(
+    df: pd.DataFrame,
+    end: str,
+    max_lag_days: int = 5,
+) -> None:
+    """Fail if the latest fetched bar is suspiciously far behind `end`.
+
+    Catches silent stale-data responses (e.g. yfinance on a rate-limited
+    Colab IP returning a cached snapshot instead of an error) that would
+    otherwise train/sign signals on months-old prices with no warning.
+    """
+    latest = pd.to_datetime(df["date"]).max()
+    target = pd.to_datetime(end)
+    lag_days = (target - latest).days
+    if lag_days > max_lag_days:
+        _fail(
+            f"latest fetched price date ({latest.date()}) is {lag_days} days "
+            f"behind requested end date ({target.date()}) — data source likely "
+            "returned stale/cached data instead of an error"
+        )
+
+
 def check_spike_filter(
     df: pd.DataFrame,
     col: str = "close",
@@ -88,10 +110,17 @@ def check_spike_filter(
     return df
 
 
-def run_all_gates(df: pd.DataFrame) -> pd.DataFrame:
-    """Run all validation gates.  Returns df augmented with spike_flag."""
+def run_all_gates(df: pd.DataFrame, end: str | None = None, max_lag_days: int = 5) -> pd.DataFrame:
+    """Run all validation gates.  Returns df augmented with spike_flag.
+
+    `end` is the pipeline's requested end-of-fetch date (cfg.end); pass it to
+    enable the freshness gate. Omit only for callers (e.g. tests) that don't
+    have a meaningful target date.
+    """
     check_ohlcv(df)
     check_date_gaps(df)
+    if end is not None:
+        check_freshness(df, end, max_lag_days)
     df = check_spike_filter(df)
     print(f"[validation] all gates passed — {len(df):,} rows, {df['ticker'].nunique()} tickers")
     return df

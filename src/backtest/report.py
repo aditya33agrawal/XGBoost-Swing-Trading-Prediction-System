@@ -14,6 +14,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.models.horizon_selection import diagnose_horizon_distribution
+from src.validation.quantile_calibration import quantile_calibration_from_surface
+
 logger = logging.getLogger(__name__)
 
 # Known historical baselines (from prior real-data runs) to compare against.
@@ -134,6 +137,19 @@ def build_backtest_report(
         "retrain_recommended": (drift_report or {}).get("retrain_recommended"),
     }
     report["findings"] = _findings(stats, sensitivity_df, regime_stats)
+
+    # Dynamic-horizon diagnostics (docs/dynamic-horizon-rr-plan.md Phase 6) —
+    # only meaningful (and only present) when the run used
+    # _walk_forward_predict_surface, i.e. oof_preds carries horizon_star.
+    if getattr(cfg, "dynamic_horizon_enabled", False) and oof_preds is not None and not oof_preds.empty \
+            and "horizon_star" in oof_preds.columns:
+        diag = diagnose_horizon_distribution(oof_preds["horizon_star"].to_numpy(), list(cfg.horizon_grid))
+        calib = quantile_calibration_from_surface(oof_preds, tuple(cfg.quantile_taus))
+        report["dynamic_horizon"] = {
+            "horizon_distribution": diag,
+            "quantile_calibration": calib.to_dict(orient="records") if not calib.empty else [],
+        }
+
     return report
 
 
@@ -173,6 +189,25 @@ def write_backtest_report(report: dict, reports_dir: str = "reports", tag: str |
         "**RETRAIN RECOMMENDED** (drift alarm)" if retrain
         else ("Stable — no retrain signal" if retrain is not None else "No drift report available")
     )
+
+    dh = report.get("dynamic_horizon")
+    dh_section = ""
+    if dh:
+        diag = dh.get("horizon_distribution", {})
+        calib_rows = dh.get("quantile_calibration", [])
+        calib_table = "\n".join(
+            f"| {r['tau']} | {r['realised_rate']} | {r['abs_gap']} | {r['n']} |" for r in calib_rows
+        )
+        dh_section = f"""
+## Dynamic horizon (docs/dynamic-horizon-rr-plan.md Phase 6)
+- h* distribution: {diag.get('fractions')}
+- collapsed (>=95% one horizon): {diag.get('collapsed')}  |  looks uniform/noise: {diag.get('looks_uniform')}
+
+### Quantile calibration (realised exceedance rate vs nominal tau — large abs_gap means don't trust the dynamic RR yet)
+| tau | realised_rate | abs_gap | n |
+|---|---|---|---|
+{calib_table if calib_table else "| (no data) | | | |"}
+"""
 
     md = f"""# Backtest report — {tag}
 
@@ -215,7 +250,7 @@ Generated: {report.get('generated_utc')}
 
 ## Retrain recommendation
 {retrain_line}
-"""
+{dh_section}"""
     md_path = d / f"backtest_{tag}.md"
     md_path.write_text(md)
     logger.info("Backtest report -> %s", md_path)

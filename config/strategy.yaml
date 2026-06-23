@@ -54,3 +54,18 @@ drift:
 # --- registry housekeeping (bot-implementaion-plan §7) ---
 registry:
   keep_bundles: 8          # retain last N for instant rollback
+
+# --- dynamic horizon & RR (docs/dynamic-horizon-rr-plan.md) — OFF by default ---
+# Flip enabled: true on Colab once Phase 0-6 ablations justify it. Leaving this
+# whole block absent/false reproduces today's fixed-horizon/fixed-RR behaviour
+# exactly (src/config.py Config.dynamic_horizon_enabled default is False).
+# dynamic_horizon:
+#   enabled: false
+#   horizon_grid: [5, 21, 63]       # coarse grid (plan §2 item 6)
+#   quantile_taus: [0.1, 0.5, 0.9]
+#   lambda_t: 0.0005                # per-day time-decay penalty in select_horizon
+#   h_max: 63
+#   rr_k: 1.0
+#   stop_atr_clamp: [0.8, 3.0]
+#   target_atr_clamp: [1.0, 6.0]
+#   quantile_ensemble_size: 1

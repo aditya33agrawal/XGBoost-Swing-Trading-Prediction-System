@@ -12,7 +12,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.labels.targets import triple_barrier_labels, forward_log_return, add_labels
+from src.labels.targets import (
+    triple_barrier_labels, forward_log_return, forward_log_return_grid, add_labels,
+)
 from src.validation.walk_forward import PurgedWalkForward
 
 
@@ -83,6 +85,56 @@ def test_walk_forward_train_strictly_before_test_with_gap():
         gap_days = (min_test - max_train).days
         assert gap_days >= (h + embargo), \
             f"purge gap {gap_days}d < required {h + embargo}d (calendar approx)"
+
+
+# (dynamic-horizon-rr-plan.md Phase 1) multi-horizon labels -------------------
+def test_forward_log_return_grid_matches_single_horizon():
+    grid = [5, 21, 63]
+    df = _synthetic_panel(n_days=150, tickers=("AAA", "BBB"))
+    out = forward_log_return_grid(df, grid)
+    for h in grid:
+        expected = forward_log_return(df, h).sort_values(["ticker", "date"]).reset_index(drop=True)
+        actual = out.sort_values(["ticker", "date"]).reset_index(drop=True)
+        pd.testing.assert_series_equal(
+            actual[f"fwd_ret_{h}"], expected["fwd_ret"], check_names=False,
+            check_exact=False, atol=1e-12,
+        )
+
+
+def test_triple_barrier_first_passage_time_bounded():
+    h = 10
+    df = _synthetic_panel(n_days=80, tickers=("AAA",))
+    out = triple_barrier_labels(df, h, record_first_passage=True)
+    out = out.sort_values("date").reset_index(drop=True)
+
+    labeled = out.dropna(subset=["tb_label"])
+    fpt = labeled["tb_first_passage_time"].to_numpy()
+    assert np.all(fpt >= 1) and np.all(fpt <= h), "first-passage time must be in [1, h]"
+
+    tail = out["tb_first_passage_time"].to_numpy()[-h:]
+    assert np.all(np.isnan(tail)), "last h rows must have no first-passage time (unlabeled)"
+
+    # tb_barrier_hit must agree with tb_label's sign/value.
+    sign_map = {1: "up", -1: "down", 0: "vertical"}
+    for _, row in labeled.iterrows():
+        assert row["tb_barrier_hit"] == sign_map[int(row["tb_label"])]
+
+
+def test_purge_embargo_uses_max_grid():
+    """Walk-forward purge for the dynamic-horizon path must use max(horizon_grid),
+    not the legacy cfg.horizon — the A1 leakage-budget cost the plan calls out."""
+    grid = [5, 21, 63]
+    h_max, embargo = max(grid), 5
+    df = _synthetic_panel(n_days=400)
+    wf = PurgedWalkForward(n_splits=3, embargo=embargo, label_h=h_max, min_train_size=100)
+    splits = wf.split(df)
+    assert splits, "expected at least one fold at the widened (max-grid) purge gap"
+    for train_idx, test_idx in splits:
+        train_dates = df.iloc[train_idx]["date"]
+        test_dates = df.iloc[test_idx]["date"]
+        gap_days = (test_dates.min() - train_dates.max()).days
+        assert gap_days >= (h_max + embargo), \
+            f"purge gap {gap_days}d < required {h_max + embargo}d (max(horizon_grid)+embargo)"
 
 
 def test_add_labels_supports_both_targets():

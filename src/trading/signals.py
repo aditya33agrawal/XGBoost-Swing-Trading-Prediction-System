@@ -82,23 +82,53 @@ def enrich_signals(
     signals["atr14"] = signals["atr14"].fillna(signals["close"] * 0.015)
     signals = signals.rename(columns={"close": "entry_price"})
 
-    # Use the dedicated signal exit multipliers, NOT the label barriers.
-    # The label barriers (barrier_*_mult) define the classification target; the
-    # paper/live stop & target are a separate risk decision.  Default 1.5×ATR
-    # stop / 3.0×ATR target gives a ~2:1 payoff instead of the old symmetric 1:1.
-    stop_mult   = getattr(cfg, "signal_stop_atr_mult", 1.5)
-    target_mult = getattr(cfg, "signal_target_atr_mult", 3.0)
+    # Dynamic RR (docs/dynamic-horizon-rr-plan.md Phase 3) — when the signal
+    # frame carries the predicted quantile surface at h* (q10_star/q90_star,
+    # from predict_latest_surface) and the feature is enabled, derive stop/
+    # target from the model's own up/down skew instead of a fixed multiple.
+    has_surface = (
+        getattr(cfg, "dynamic_horizon_enabled", False)
+        and {"q10_star", "q90_star"}.issubset(signals.columns)
+    )
+    if has_surface:
+        k = getattr(cfg, "rr_k", 1.0)
+        stop_lo, stop_hi = getattr(cfg, "stop_atr_clamp", (0.8, 3.0))
+        tgt_lo, tgt_hi = getattr(cfg, "target_atr_clamp", (1.0, 6.0))
 
-    signals["stop_loss"]    = (signals["entry_price"] - stop_mult   * signals["atr14"]).round(2)
-    signals["target_price"] = (signals["entry_price"] + target_mult * signals["atr14"]).round(2)
+        atr_safe = signals["atr14"].replace(0, np.nan)
+        q10_abs = signals["q10_star"].abs()
+        q90 = signals["q90_star"].clip(lower=0)
 
-    risk   = (signals["entry_price"] - signals["stop_loss"]).replace(0, np.nan)
-    reward = signals["target_price"] - signals["entry_price"]
-    signals["risk_reward"]  = (reward / risk).round(2)
+        # risk_reward (diagnostic, pre-clamp) — the asymmetry the model
+        # actually predicted, before the executed multiples are clamped.
+        signals["risk_reward"] = (q90 / q10_abs.replace(0, np.nan)).round(2)
+
+        stop_mult_row = (k * q10_abs * signals["entry_price"] / atr_safe).clip(stop_lo, stop_hi).fillna(stop_lo)
+        target_mult_row = (k * q90 * signals["entry_price"] / atr_safe).clip(tgt_lo, tgt_hi).fillna(tgt_hi)
+
+        signals["stop_loss"] = (signals["entry_price"] - stop_mult_row * signals["atr14"]).round(2)
+        signals["target_price"] = (signals["entry_price"] + target_mult_row * signals["atr14"]).round(2)
+        signals["horizon_days"] = signals["horizon_days"].fillna(cfg.horizon).astype(int) \
+            if "horizon_days" in signals.columns else cfg.horizon
+    else:
+        # Legacy fixed-multiple path — unchanged. Use the dedicated signal
+        # exit multipliers, NOT the label barriers. The label barriers
+        # (barrier_*_mult) define the classification target; the paper/live
+        # stop & target are a separate risk decision. Default 1.5×ATR stop /
+        # 3.0×ATR target gives a ~2:1 payoff instead of the old symmetric 1:1.
+        stop_mult   = getattr(cfg, "signal_stop_atr_mult", 1.5)
+        target_mult = getattr(cfg, "signal_target_atr_mult", 3.0)
+
+        signals["stop_loss"]    = (signals["entry_price"] - stop_mult   * signals["atr14"]).round(2)
+        signals["target_price"] = (signals["entry_price"] + target_mult * signals["atr14"]).round(2)
+
+        risk   = (signals["entry_price"] - signals["stop_loss"]).replace(0, np.nan)
+        reward = signals["target_price"] - signals["entry_price"]
+        signals["risk_reward"]  = (reward / risk).round(2)
+        signals["horizon_days"] = cfg.horizon
 
     signals["atr14"]        = signals["atr14"].round(2)
     signals["entry_price"]  = signals["entry_price"].round(2)
-    signals["horizon_days"] = cfg.horizon
 
     latest_date = price_df["date"].max()
     signals["signal_date"] = str(latest_date.date()) if hasattr(latest_date, "date") else str(latest_date)

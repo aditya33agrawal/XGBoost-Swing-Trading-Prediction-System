@@ -83,6 +83,9 @@ UNIVERSE: list[str] = [
 # ---------------------------------------------------------------------------
 # Real data via yfinance
 # ---------------------------------------------------------------------------
+_STALE_LAG_DAYS = 5   # matches src/data/validation.py's check_freshness default
+
+
 def _fetch_yfinance(
     tickers: list[str],
     start: str,
@@ -154,6 +157,20 @@ def _fetch_yfinance(
                 still_missing = [t for t in tickers if t not in set(df["ticker"].unique())]
                 if still_missing:
                     print(f"[ingestion] WARNING: could not load {still_missing} — excluded from universe")
+
+            # Yahoo occasionally serves a stale cached snapshot for bulk
+            # multi-ticker calls (observed on rate-limited Colab IPs) — no
+            # exception, just silently truncated dates. Retry before
+            # accepting it, since this is usually transient.
+            lag_days = (pd.Timestamp(end) - df["date"].max()).days
+            if lag_days > _STALE_LAG_DAYS and attempt < max_retries - 1:
+                print(
+                    f"[ingestion] WARNING: latest bar ({df['date'].max().date()}) is "
+                    f"{lag_days}d behind requested end ({end}) — looks like a stale "
+                    f"cached response, retrying (attempt {attempt + 1}/{max_retries})…"
+                )
+                time.sleep(backoff ** attempt)
+                continue
             return df
         except Exception as e:
             if attempt < max_retries - 1:

@@ -62,6 +62,24 @@ class Config:
     # --- costs -----------------------------------------------------------
     cost_bps_per_side: float = 20.0       # ~40 bps round-trip (STT+slip)
 
+    # --- dynamic horizon & RR (docs/dynamic-horizon-rr-plan.md) -----------
+    # Master switch: everything below is inert when False. The legacy
+    # fixed-horizon (cfg.horizon) / fixed-RR (signal_*_atr_mult) path is
+    # untouched so the frozen baseline stays reproducible (plan §Phase 6
+    # ablations need it). Flip on only for an explicit dynamic-horizon run.
+    dynamic_horizon_enabled: bool = False
+    horizon_grid: list = field(default_factory=lambda: [5, 21, 63])  # coarse grid (plan §2 item 6)
+    quantile_taus: list = field(default_factory=lambda: [0.1, 0.5, 0.9])
+    horizon_lambda_t: float = 0.0005   # per-day time-decay penalty in select_horizon
+    horizon_h_max: int = 63            # hard cap on h* (plan §2 item 7)
+    rr_k: float = 1.0                  # stop=entry-k*|q10|*entry, target=entry+k*q90*entry
+    stop_atr_clamp: tuple = (0.8, 3.0)    # sanity floor/ceiling on derived stop, in ATR mult
+    target_atr_clamp: tuple = (1.0, 6.0)  # sanity floor/ceiling on derived target, in ATR mult
+    # Separate (smaller) bagging count for quantile heads — the grid x tau
+    # training matrix already multiplies cost by len(horizon_grid)*len(quantile_taus);
+    # don't also multiply by cfg.ensemble_size unless explicitly raised.
+    quantile_ensemble_size: int = 1
+
     # --- model -----------------------------------------------------------
     xgb_n_trials: int = 50               # Optuna trials
     xgb_early_stopping: int = 50
@@ -165,6 +183,17 @@ class Config:
         if "signal_target_atr_mult" in r: flat["signal_target_atr_mult"] = r["signal_target_atr_mult"]
         reg = data.get("registry", {})
         if "keep_bundles" in reg:    flat["keep_bundles"] = reg["keep_bundles"]
+
+        dh = data.get("dynamic_horizon", {})
+        if "enabled" in dh:           flat["dynamic_horizon_enabled"] = dh["enabled"]
+        if "horizon_grid" in dh:      flat["horizon_grid"] = dh["horizon_grid"]
+        if "quantile_taus" in dh:     flat["quantile_taus"] = dh["quantile_taus"]
+        if "lambda_t" in dh:          flat["horizon_lambda_t"] = dh["lambda_t"]
+        if "h_max" in dh:             flat["horizon_h_max"] = dh["h_max"]
+        if "rr_k" in dh:              flat["rr_k"] = dh["rr_k"]
+        if "stop_atr_clamp" in dh:    flat["stop_atr_clamp"] = tuple(dh["stop_atr_clamp"])
+        if "target_atr_clamp" in dh:  flat["target_atr_clamp"] = tuple(dh["target_atr_clamp"])
+        if "quantile_ensemble_size" in dh: flat["quantile_ensemble_size"] = dh["quantile_ensemble_size"]
 
         flat.update(overrides)
         return cls(**flat)
