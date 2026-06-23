@@ -179,28 +179,42 @@ def _retry_tickers_individually(
         "MCDOWELL-N.NS": ["MCDOWELL-N.NS", "UNITDSPR.NS"],
     }
 
+    # First-attempt failures here are often transient rate-limiting on Yahoo's
+    # side (the bulk multi-ticker call above hammers the API), not genuine
+    # delistings — so retry each candidate symbol a few times with backoff
+    # before moving to the next alias / giving up on the ticker.
+    max_attempts = 3
+    backoff = 2.0
+
     frames = []
     for ticker in tickers:
         candidates = ALIASES.get(ticker, [ticker])
         for symbol in candidates:
-            try:
-                raw = yf.download(symbol, start=start, end=end,
-                                  progress=False, auto_adjust=True)
-                if raw.empty:
-                    continue
-                raw = raw.reset_index()
-                raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
-                sub = raw[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
-                sub.columns = ["date", "open", "high", "low", "close", "volume"]
-                sub["ticker"] = ticker  # use original symbol for consistency
-                sub["date"] = pd.to_datetime(sub["date"]).dt.normalize()
-                sub = sub.dropna(subset=["close"])
-                sub = sub[sub["close"] > 0]
-                if not sub.empty:
-                    frames.append(sub)
-                    break
-            except Exception:
-                continue
+            sub = None
+            for attempt in range(max_attempts):
+                try:
+                    raw = yf.download(symbol, start=start, end=end,
+                                      progress=False, auto_adjust=True)
+                    if raw.empty:
+                        raise ValueError("empty response")
+                    raw = raw.reset_index()
+                    raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
+                    candidate_sub = raw[["Date", "Open", "High", "Low", "Close", "Volume"]].copy()
+                    candidate_sub.columns = ["date", "open", "high", "low", "close", "volume"]
+                    candidate_sub["ticker"] = ticker  # use original symbol for consistency
+                    candidate_sub["date"] = pd.to_datetime(candidate_sub["date"]).dt.normalize()
+                    candidate_sub = candidate_sub.dropna(subset=["close"])
+                    candidate_sub = candidate_sub[candidate_sub["close"] > 0]
+                    if not candidate_sub.empty:
+                        sub = candidate_sub
+                        break
+                except Exception:
+                    pass
+                if attempt < max_attempts - 1:
+                    time.sleep(backoff ** attempt)
+            if sub is not None:
+                frames.append(sub)
+                break
 
     return pd.concat(frames, ignore_index=True) if frames else None
 

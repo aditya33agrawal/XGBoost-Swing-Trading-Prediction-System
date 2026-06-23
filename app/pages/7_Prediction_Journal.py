@@ -129,7 +129,7 @@ display_cols = [c for c in [
     "hit_target", "hit_stop", "is_correct", "model_version",
 ] if c in view.columns]
 
-st.dataframe(view[display_cols], use_container_width=True, height=420)
+st.dataframe(view[display_cols], width="stretch", height=420)
 
 # ── Calibration scatter ───────────────────────────────────────────────────────
 if not resolved.empty and {"prob_up", "actual_fwd_ret"}.issubset(resolved.columns):
@@ -145,7 +145,7 @@ if not resolved.empty and {"prob_up", "actual_fwd_ret"}.issubset(resolved.column
     )
     fig.add_hline(y=0, line_dash="dash", line_color="#6b7280", opacity=0.5)
     fig.update_layout(paper_bgcolor="#0f172a", plot_bgcolor="#1e293b", font_color="#e2e8f0")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 st.divider()
 

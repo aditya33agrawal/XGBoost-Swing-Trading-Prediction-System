@@ -139,8 +139,8 @@ else:
     fmt.update({"pnl": "₹{:+,.2f}", "pnl_pct": "{:+.2f}%"})
 
     st.dataframe(
-        closed_sorted.style.format(fmt).applymap(_color_pnl, subset=[c for c in ["pnl", "pnl_pct"] if c in disp_cols]),
-        use_container_width=True,
+        closed_sorted.style.format(fmt).map(_color_pnl, subset=[c for c in ["pnl", "pnl_pct"] if c in disp_cols]),
+        width="stretch",
         height=350,
     )
 

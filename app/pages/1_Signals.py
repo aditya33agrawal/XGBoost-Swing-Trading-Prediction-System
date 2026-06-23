@@ -96,8 +96,8 @@ styled = (
         "risk_reward":  "{:.2f}x",
         "atr14":        "₹{:,.2f}",
     })
-    .applymap(_color_signal, subset=["signal"])
-    .applymap(_color_prob,   subset=["prob_up"])
+    .map(_color_signal, subset=["signal"])
+    .map(_color_prob,   subset=["prob_up"])
 )
 
 st.dataframe(styled, width="stretch", height=350)

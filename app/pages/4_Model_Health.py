@@ -52,7 +52,7 @@ st.markdown(
 )
 
 # ── IC trend chart ────────────────────────────────────────────────────────────
-st.plotly_chart(ic_trend_chart(ic_df), use_container_width=True)
+st.plotly_chart(ic_trend_chart(ic_df), width="stretch")
 
 st.divider()
 
@@ -65,7 +65,7 @@ with col1:
     run_id_to_load = str(deployed.iloc[0]["run_id"]) if not deployed.empty else "latest"
     fi_df = load_feature_importance(run_id=run_id_to_load)
     if not fi_df.empty:
-        st.plotly_chart(feature_importance_chart(fi_df, top_n=20), use_container_width=True)
+        st.plotly_chart(feature_importance_chart(fi_df, top_n=20), width="stretch")
     else:
         st.info("Feature importance not yet available. Requires a full training run.")
 
@@ -79,8 +79,8 @@ with col2:
             runs[disp_cols].style
             .format({"oof_ic": lambda v: f"{v:.4f}" if v is not None else "—",
                      "bt_sharpe": lambda v: f"{v:.3f}" if v is not None else "—"})
-            .applymap(_color_deployed, subset=["is_deployed"]),
-            use_container_width=True,
+            .map(_color_deployed, subset=["is_deployed"]),
+            width="stretch",
             height=350,
         )
     else:

@@ -36,6 +36,22 @@ def _client():
     return get_supabase_client(get_supabase_url(), get_supabase_key())
 
 
+def _ensure_ui_run(client) -> None:
+    """Make sure a placeholder model_runs row exists for manual UI trades.
+
+    paper_trades.run_id has a FK to model_runs.run_id, but manual UI trades
+    aren't tied to a training run — upsert a minimal row once so the FK
+    constraint doesn't reject the first sync.
+    """
+    from src.db.supabase_client import upsert_rows
+    upsert_rows(
+        client,
+        "model_runs",
+        [{"run_id": _UI_RUN_ID, "model_version": _UI_RUN_ID, "is_deployed": False}],
+        on_conflict="run_id",
+    )
+
+
 def _persist(portfolio: PaperPortfolio) -> tuple[bool, str]:
     """Save to JSON, sync to Supabase, refresh the UI cache."""
     try:
@@ -49,6 +65,7 @@ def _persist(portfolio: PaperPortfolio) -> tuple[bool, str]:
         sb_msg = " (Supabase not configured — saved locally only)"
     else:
         try:
+            _ensure_ui_run(client)
             n_trades = sync_paper_trades(portfolio, _UI_RUN_ID, client)
             n_ledger = sync_ledger(portfolio, _UI_RUN_ID, client)
             sb_msg = f" · synced {n_trades} trade(s), {n_ledger} ledger row(s) to Supabase"

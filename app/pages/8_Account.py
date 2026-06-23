@@ -98,8 +98,8 @@ else:
     st.dataframe(
         view[disp_cols].style.format({
             "price": "₹{:,.2f}", "amount": "₹{:+,.2f}", "running_balance": "₹{:,.2f}",
-        }).applymap(_color_amount, subset=["amount"]),
-        use_container_width=True,
+        }).map(_color_amount, subset=["amount"]),
+        width="stretch",
         height=450,
     )
 

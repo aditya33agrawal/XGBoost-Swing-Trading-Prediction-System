@@ -53,9 +53,9 @@ st.divider()
 if not ic_df.empty:
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(ic_trend_chart(ic_df), use_container_width=True)
+        st.plotly_chart(ic_trend_chart(ic_df), width="stretch")
     with col2:
-        st.plotly_chart(dir_accuracy_chart(ic_df), use_container_width=True)
+        st.plotly_chart(dir_accuracy_chart(ic_df), width="stretch")
 else:
     st.info("No resolved predictions yet. Predictions resolve after the horizon period has passed.")
 
@@ -67,7 +67,7 @@ if not ic_df.empty:
             disp["ic"] = disp["ic"].apply(lambda v: f"{v:.4f}" if v is not None else "—")
         if "dir_accuracy" in disp.columns:
             disp["dir_accuracy"] = disp["dir_accuracy"].apply(lambda v: f"{v:.1%}" if v is not None else "—")
-        st.dataframe(disp, use_container_width=True)
+        st.dataframe(disp, width="stretch")
 
 # ── Scatter: prob_up vs actual return ─────────────────────────────────────────
 if not outcomes.empty and "prob_up" in outcomes.columns and "actual_fwd_ret" in outcomes.columns:
@@ -87,7 +87,7 @@ if not outcomes.empty and "prob_up" in outcomes.columns and "actual_fwd_ret" in 
     fig.add_hline(y=0, line_dash="dash", line_color="#6b7280", opacity=0.5)
     fig.add_vline(x=0.5, line_dash="dash", line_color="#6b7280", opacity=0.5)
     fig.update_layout(paper_bgcolor="#0f172a", plot_bgcolor="#1e293b", font_color="#e2e8f0")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 # ── Model run history ─────────────────────────────────────────────────────────
 if not runs.empty:
@@ -101,5 +101,5 @@ if not runs.empty:
             "bt_cagr":       lambda v: f"{v:.1%}"  if v is not None else "—",
             "bt_max_drawdown": lambda v: f"{v:.1%}" if v is not None else "—",
         }),
-        use_container_width=True,
+        width="stretch",
     )

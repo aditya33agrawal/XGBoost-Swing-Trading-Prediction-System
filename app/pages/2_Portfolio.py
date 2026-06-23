@@ -66,7 +66,7 @@ if not closed_t.empty and "gross_pnl" in closed_t.columns:
 st.divider()
 
 # ── Equity curve ──────────────────────────────────────────────────────────────
-st.plotly_chart(equity_curve_chart(trades, initial_capital), use_container_width=True)
+st.plotly_chart(equity_curve_chart(trades, initial_capital), width="stretch")
 
 # ── Open positions ────────────────────────────────────────────────────────────
 st.subheader("Open Positions")
@@ -82,7 +82,7 @@ else:
             "target_price": "₹{:,.2f}",
             "prob_up":      "{:.1%}",
         }),
-        use_container_width=True,
+        width="stretch",
     )
 
 # ── Closed trades ─────────────────────────────────────────────────────────────
@@ -105,17 +105,17 @@ else:
             "exit_price":  "₹{:,.2f}",
             "pnl":         "₹{:+,.0f}",
             "pnl_pct":     "{:+.1f}%",
-        }).applymap(_color_pnl, subset=["pnl","pnl_pct"]),
-        use_container_width=True,
+        }).map(_color_pnl, subset=["pnl","pnl_pct"]),
+        width="stretch",
         height=300,
     )
 
     # ── Charts row ────────────────────────────────────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
-        st.plotly_chart(exit_reason_chart(trades), use_container_width=True)
+        st.plotly_chart(exit_reason_chart(trades), width="stretch")
     with col2:
-        st.plotly_chart(pnl_distribution_chart(trades), use_container_width=True)
+        st.plotly_chart(pnl_distribution_chart(trades), width="stretch")
 
 # ── Summary stats ─────────────────────────────────────────────────────────────
 if not closed_t.empty and "pnl_pct" in closed_t.columns:
