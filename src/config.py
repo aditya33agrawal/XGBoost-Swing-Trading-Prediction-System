@@ -92,6 +92,12 @@ class Config:
     ensemble_size: int = 3
     # "auto" → use GPU if one is visible (Colab), else CPU. Force with "cuda"/"cpu".
     device: Literal["auto", "cuda", "cpu"] = "auto"
+    # Concurrent XGBoost fits (Optuna trials, walk-forward rebalance steps).
+    # Each fit is tiny (one stock-day slice, <=1500 shallow trees), so on a
+    # single GPU the bottleneck is per-call launch/transfer overhead, not
+    # compute — running several fits concurrently overlaps that overhead
+    # instead of paying it serially. 1 = old fully-sequential behaviour.
+    max_parallel_fits: int = 8
 
     # --- storage ---------------------------------------------------------
     data_dir: str = "data"

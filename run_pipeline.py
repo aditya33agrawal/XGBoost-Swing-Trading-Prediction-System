@@ -27,6 +27,11 @@ python run_pipeline.py --trials 100
 
 # Set paper-trading capital
 python run_pipeline.py --capital 500000 --max-positions 5
+
+# Dynamic horizon + dynamic risk-reward (docs/dynamic-horizon-rr-plan.md) —
+# learns a per-name holding horizon and stop/target from a predicted return
+# surface instead of the fixed --horizon / fixed-ATR-multiple strategy.
+python run_pipeline.py --dynamic-horizon
 """
 from __future__ import annotations
 
@@ -65,6 +70,10 @@ def parse_args() -> argparse.Namespace:
                          help="Optuna trials (0 = skip, loads saved params if available)")
     g_model.add_argument("--device",     choices=["auto", "cuda", "cpu"], default="auto",
                          help="XGBoost device (auto detects GPU)")
+    g_model.add_argument("--dynamic-horizon", action="store_true",
+                         help="Enable per-name learned horizon + dynamic risk-reward "
+                              "(docs/dynamic-horizon-rr-plan.md) instead of the fixed "
+                              "--horizon / fixed-ATR-multiple strategy. Off by default.")
 
     # Run modes
     g_run = p.add_argument_group("run modes")
@@ -116,6 +125,7 @@ def main() -> None:
         device         = args.device,
         rebalance_every= args.horizon,
         embargo        = args.horizon,
+        dynamic_horizon_enabled = args.dynamic_horizon,
         # Optuna: fast-signals forces 0 trials (loads saved params)
         xgb_n_trials   = 0 if fast else args.trials,
         # Backtest

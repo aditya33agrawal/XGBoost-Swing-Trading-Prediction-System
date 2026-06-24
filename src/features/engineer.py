@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 
 try:
     import pandas_ta as ta
@@ -277,6 +278,7 @@ def _add_relative_features(df: pd.DataFrame) -> pd.DataFrame:
 def build_features(
     df: pd.DataFrame,
     index_df: pd.DataFrame | None = None,
+    n_jobs: int = -1,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Compute all features; return (df_with_features, feature_col_names).
 
@@ -284,14 +286,16 @@ def build_features(
     ----------
     df : long-format OHLCV frame — columns: date, ticker, open, high, low, close, volume
     index_df : optional index frame (^NSEI, ^INDIAVIX) for regime features
+    n_jobs : workers for the per-ticker feature loop (-1 = all cores). Each
+        ticker's time series is independent, so this parallelizes cleanly.
     """
     df = df.sort_values(["ticker", "date"]).copy()
 
-    # Per-ticker time-series features
-    feat_frames = []
-    for ticker, grp in df.groupby("ticker", sort=False):
-        feat = _features_for_ticker(grp)
-        feat_frames.append(feat)
+    # Per-ticker time-series features (embarrassingly parallel across tickers)
+    groups = [grp for _, grp in df.groupby("ticker", sort=False)]
+    feat_frames = Parallel(n_jobs=n_jobs, prefer="processes")(
+        delayed(_features_for_ticker)(grp) for grp in groups
+    )
 
     feat_df = pd.concat(feat_frames).reindex(df.index)
     df = pd.concat([df, feat_df], axis=1)

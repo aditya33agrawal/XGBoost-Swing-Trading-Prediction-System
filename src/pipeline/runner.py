@@ -21,6 +21,7 @@ import logging
 import os
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -135,17 +136,17 @@ def _walk_forward_predict(
 
     rebal_points = list(range(cfg.train_min_days, len(dates) - cfg.horizon, cfg.rebalance_every))
     n_steps = len(rebal_points)
+    max_workers = max(1, cfg.max_parallel_fits)
     logger.info(
-        "Walk-forward: %d rebalance steps from %s to %s (device=%s)",
+        "Walk-forward: %d rebalance steps from %s to %s (device=%s, parallel_fits=%d)",
         n_steps,
         pd.Timestamp(dates[rebal_points[0]]).date() if n_steps else "n/a",
         pd.Timestamp(dates[rebal_points[-1]]).date() if n_steps else "n/a",
-        get_device(),
+        get_device(), max_workers,
     )
     t_wf = time.time()
 
-    # Use all unique dates as rebalance points spaced rebalance_every apart
-    for step, i in enumerate(rebal_points):
+    def _run_step(step: int, i: int):
         rebal_date = dates[i]
         cutoff_date = dates[max(0, i - cfg.embargo - cfg.horizon)]
 
@@ -155,7 +156,7 @@ def _walk_forward_predict(
         test_df = df[test_mask].dropna(subset=feature_cols)
 
         if len(train_df) < cfg.train_min_days or test_df.empty:
-            continue
+            return step, None, None
 
         # Early-stopping validation window.  The old 21-day slice gave early
         # stopping almost no signal: with the low learning rates Optuna favours
@@ -168,7 +169,7 @@ def _walk_forward_predict(
         val_mask = (df["date"] > val_cutoff) & (df["date"] <= cutoff_date)
         val_df = df[val_mask].dropna(subset=feature_cols + [target_col])
         if val_df.empty:
-            continue
+            return step, None, None
 
         X_tr = train_df[feature_cols]
         y_tr = train_df[target_col]
@@ -193,7 +194,7 @@ def _walk_forward_predict(
             )
         except Exception as e:
             logger.warning("training failed at %s: %s", rebal_date, e)
-            continue
+            return step, None, None
 
         # Early stopping can land on best_iteration == 0 when the training
         # window is too sparse (notably the early 2017–2020 folds).  A 0-tree
@@ -204,7 +205,7 @@ def _walk_forward_predict(
         if all(bi is not None and bi == 0 for bi in best_iters):
             logger.warning("skipping fold %s — best_iteration=0 for all %d bag members (sparse train, no signal)",
                             rebal_date, len(models))
-            continue
+            return step, None, None
         models = [m for m, bi in zip(models, best_iters) if not (bi is not None and bi == 0)]
 
         scores = predict_bag(models, X_te, task=task)
@@ -214,21 +215,44 @@ def _walk_forward_predict(
             pred_cols.append(cfg.regime_sma_col)
         pred_df = test_df[pred_cols].copy()
         pred_df["pred"] = scores
-        all_preds.append(pred_df)
+        info = {"rebal_date": rebal_date, "n_train": len(train_df), "best_iters": best_iters}
+        return step, pred_df, info
 
-        # Periodic progress with a rough ETA so long runs aren't a black box.
-        if step % 10 == 0 or step == n_steps - 1:
-            elapsed = time.time() - t_wf
-            rate = elapsed / (step + 1)
-            eta = rate * (n_steps - step - 1)
-            logger.info(
-                "  step %3d/%d | %s | train=%d rows | best_iters=%s | ETA %.0fs",
-                step + 1, n_steps, pd.Timestamp(rebal_date).date(),
-                len(train_df),
-                best_iters,
-                eta,
-            )
+    # Rebalance steps are independent (each rebuilds its own expanding train
+    # window from `df`), so they're embarrassingly parallel. XGBoost's fit()
+    # releases the GIL during tree building, so thread-based concurrency here
+    # gives real wall-clock speedup instead of fighting one slot of a single
+    # shared GPU/CPU sequentially.
+    results: list = [None] * n_steps
+    completed = 0
+    if max_workers <= 1:
+        for step, i in enumerate(rebal_points):
+            results[step] = _run_step(step, i)
+            completed += 1
+            if completed % 10 == 0 or completed == n_steps:
+                elapsed = time.time() - t_wf
+                eta = (elapsed / completed) * (n_steps - completed)
+                logger.info("  step %3d/%d | ETA %.0fs", completed, n_steps, eta)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_run_step, step, i) for step, i in enumerate(rebal_points)]
+            for fut in as_completed(futures):
+                step, pred_df, info = fut.result()
+                results[step] = (step, pred_df, info)
+                completed += 1
+                if completed % 10 == 0 or completed == n_steps:
+                    elapsed = time.time() - t_wf
+                    eta = (elapsed / completed) * (n_steps - completed)
+                    if info is not None:
+                        logger.info(
+                            "  %3d/%d done | latest=%s | train=%d rows | best_iters=%s | ETA %.0fs",
+                            completed, n_steps, pd.Timestamp(info["rebal_date"]).date(),
+                            info["n_train"], info["best_iters"], eta,
+                        )
+                    else:
+                        logger.info("  %3d/%d done | ETA %.0fs", completed, n_steps, eta)
 
+    all_preds = [r[1] for r in results if r is not None and r[1] is not None]
     logger.info("Walk-forward done in %.1fs", time.time() - t_wf)
     return pd.concat(all_preds, ignore_index=True) if all_preds else pd.DataFrame()
 
@@ -261,13 +285,14 @@ def _walk_forward_predict_surface(
     # leakage-budget cost the plan calls out explicitly (Phase 1 item 4).
     rebal_points = list(range(cfg.train_min_days, len(dates) - h_max, cfg.rebalance_every))
     n_steps = len(rebal_points)
+    max_workers = max(1, cfg.max_parallel_fits)
     logger.info(
-        "Walk-forward (dynamic horizon): %d rebalance steps, grid=%s, taus=%s",
-        n_steps, grid, taus,
+        "Walk-forward (dynamic horizon): %d rebalance steps, grid=%s, taus=%s, parallel_fits=%d",
+        n_steps, grid, taus, max_workers,
     )
     t_wf = time.time()
 
-    for step, i in enumerate(rebal_points):
+    def _run_step(step: int, i: int):
         rebal_date = dates[i]
         cutoff_date = dates[max(0, i - cfg.embargo - h_max)]
         val_cutoff = dates[max(0, i - cfg.embargo - h_max - cfg.wf_es_val_days)]
@@ -278,7 +303,7 @@ def _walk_forward_predict_surface(
 
         test_df = df[test_mask].dropna(subset=feature_cols)
         if test_df.empty:
-            continue
+            return step, None
 
         # Build per-horizon train/val slices — each quantile head trains
         # against its own fwd_ret_{h} column, dropping rows unlabeled at
@@ -300,7 +325,7 @@ def _walk_forward_predict_surface(
             y_val_by_h[h] = vl[col]
             sw_by_h[h] = sample_weights(tr, h, label_col=col)
         if not ok:
-            continue
+            return step, None
 
         X_tr = train_idx_ref[feature_cols]
         X_vl = val_idx_ref[feature_cols]
@@ -316,7 +341,7 @@ def _walk_forward_predict_surface(
             )
         except Exception as e:
             logger.warning("quantile surface training failed at %s: %s", rebal_date, e)
-            continue
+            return step, None
 
         # Degenerate-fold skip (mirrors _walk_forward_predict): drop any cell
         # where every bag member landed on best_iteration==0.
@@ -328,7 +353,7 @@ def _walk_forward_predict_surface(
                 usable[key] = kept
         if len(usable) < len(grid) * len(taus):
             logger.warning("skipping fold %s — degenerate quantile cell(s) (sparse train)", rebal_date)
-            continue
+            return step, None
 
         surface_pred = predict_surface(usable, X_te)
         h_star, score_star, q_star = select_horizon(
@@ -352,17 +377,33 @@ def _walk_forward_predict_surface(
         pred_df["q10_star"] = q_star["q10"]
         pred_df["q50_star"] = q_star["q50"]
         pred_df["q90_star"] = q_star["q90"]
-        all_preds.append(pred_df)
+        return step, pred_df
 
-        if step % 10 == 0 or step == n_steps - 1:
-            elapsed = time.time() - t_wf
-            rate = elapsed / (step + 1)
-            eta = rate * (n_steps - step - 1)
-            logger.info(
-                "  step %3d/%d | %s | ETA %.0fs",
-                step + 1, n_steps, pd.Timestamp(rebal_date).date(), eta,
-            )
+    # Same rationale as _walk_forward_predict: rebalance steps are independent,
+    # so run them concurrently to overlap per-fit GPU/CPU launch overhead.
+    results: list = [None] * n_steps
+    completed = 0
+    if max_workers <= 1:
+        for step, i in enumerate(rebal_points):
+            results[step] = _run_step(step, i)
+            completed += 1
+            if completed % 10 == 0 or completed == n_steps:
+                elapsed = time.time() - t_wf
+                eta = (elapsed / completed) * (n_steps - completed)
+                logger.info("  step %3d/%d | ETA %.0fs", completed, n_steps, eta)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_run_step, step, i) for step, i in enumerate(rebal_points)]
+            for fut in as_completed(futures):
+                step, pred_df = fut.result()
+                results[step] = (step, pred_df)
+                completed += 1
+                if completed % 10 == 0 or completed == n_steps:
+                    elapsed = time.time() - t_wf
+                    eta = (elapsed / completed) * (n_steps - completed)
+                    logger.info("  %3d/%d done | ETA %.0fs", completed, n_steps, eta)
 
+    all_preds = [r[1] for r in results if r is not None and r[1] is not None]
     logger.info("Walk-forward (dynamic horizon) done in %.1fs", time.time() - t_wf)
     result = pd.concat(all_preds, ignore_index=True) if all_preds else pd.DataFrame()
     if not result.empty:
@@ -666,6 +707,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             task=task,
             n_trials=cfg.xgb_n_trials,
             sample_weights=sw_hpt,
+            max_workers=cfg.max_parallel_fits,
         )
         # Persist so fast-signals runs can reuse them
         _params_path.parent.mkdir(parents=True, exist_ok=True)

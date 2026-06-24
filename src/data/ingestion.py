@@ -191,9 +191,12 @@ def _retry_tickers_individually(
     # recently renamed/relisted and the exact symbol is unconfirmed.
     ALIASES: dict[str, list[str]] = {
         "M&M.NS": ["M&M.NS", "MM.NS"],
-        "GET&D.NS": ["GET&D.NS", "GVT&D.NS"],
+        # GET&D.NS was renamed to GVT&D.NS after the Hitachi acquisition;
+        # the old symbol now 404s on yfinance, so try the live one first.
+        "GET&D.NS": ["GVT&D.NS", "GET&D.NS"],
         "LTF.NS": ["LTF.NS", "L&TFH.NS"],
-        "MCDOWELL-N.NS": ["MCDOWELL-N.NS", "UNITDSPR.NS"],
+        # MCDOWELL-N.NS was renamed to UNITDSPR.NS; old symbol now 404s.
+        "MCDOWELL-N.NS": ["UNITDSPR.NS", "MCDOWELL-N.NS"],
         # LTIMindtree renamed its trading symbol LTIM -> LTM on 2026-02-27
         # (rebranded to "LTM Limited"); LTIM.NS no longer resolves.
         "LTM.NS": ["LTM.NS", "LTIM.NS"],
@@ -205,8 +208,8 @@ def _retry_tickers_individually(
     # side (the bulk multi-ticker call above hammers the API), not genuine
     # delistings — so retry each candidate symbol a few times with backoff
     # before moving to the next alias / giving up on the ticker.
-    max_attempts = 3
-    backoff = 2.0
+    max_attempts = 5
+    backoff = 3.0
 
     frames = []
     for ticker in tickers:

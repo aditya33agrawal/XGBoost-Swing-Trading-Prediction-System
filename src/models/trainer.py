@@ -331,6 +331,7 @@ def _optuna_objective(
     task: str,
     sample_weights_arr: np.ndarray | None,
     eval_target: pd.Series | None = None,
+    threads_per_trial: int = 0,
 ):
     from scipy import stats as sp_stats
     xgb = _get_xgb()
@@ -352,6 +353,10 @@ def _optuna_objective(
         "early_stopping_rounds": 50,
     }
     params = _with_device(params)
+    # Cap each trial's CPU thread pool so N trials running concurrently
+    # (see tune_hyperparameters n_jobs) don't oversubscribe the machine.
+    if threads_per_trial > 0:
+        params["n_jobs"] = threads_per_trial
 
     fold_scores = []
     for train_idx, val_idx in splits:
@@ -393,6 +398,7 @@ def tune_hyperparameters(
     n_trials: int = 50,
     sample_weights: np.ndarray | None = None,
     eval_target_col: str = "fwd_ret",
+    max_workers: int = 8,
 ) -> dict:
     """Run Optuna search; return best params dict.
 
@@ -423,9 +429,27 @@ def tune_hyperparameters(
         pruner=optuna.pruners.MedianPruner(n_startup_trials=10),
     )
 
+    # Run multiple Optuna trials concurrently — XGBoost's fit() releases the
+    # GIL during tree building, so Optuna's thread-based n_jobs gives real
+    # parallelism here. Each trial's XGBoost is capped to cpu_count // n_parallel
+    # threads so the trials don't oversubscribe and fight each other for cores
+    # on the CPU-side work (DMatrix construction, histogram binning) that runs
+    # regardless of device. On GPU, concurrent trials overlap that per-call
+    # host-side overhead instead of paying it serially for one device — the
+    # actual tree-building kernels still queue on the GPU, but at this model
+    # size (shallow trees, small per-fold data) the overhead dominates, not
+    # the kernel time, so concurrency still helps.
+    cpu_count = os.cpu_count() or 1
+    if n_trials > 1:
+        n_parallel = max(1, min(cpu_count, max(1, max_workers), n_trials))
+        threads_per_trial = max(1, cpu_count // n_parallel)
+    else:
+        n_parallel = 1
+        threads_per_trial = 0
+
     logger.info(
-        "Optuna search: %d trials | %d CV folds | device=%s",
-        n_trials, len(splits), _DEVICE,
+        "Optuna search: %d trials | %d CV folds | device=%s | parallel_trials=%d | threads/trial=%s",
+        n_trials, len(splits), _DEVICE, n_parallel, threads_per_trial or "default",
     )
 
     def _log_trial(study_, trial):
@@ -438,10 +462,10 @@ def tune_hyperparameters(
         )
 
     study.optimize(
-        lambda t: _optuna_objective(t, X, y, splits, task, sample_weights, eval_target),
+        lambda t: _optuna_objective(t, X, y, splits, task, sample_weights, eval_target, threads_per_trial),
         n_trials=n_trials,
         show_progress_bar=False,
-        n_jobs=1,
+        n_jobs=n_parallel,
         callbacks=[_log_trial],
     )
 
