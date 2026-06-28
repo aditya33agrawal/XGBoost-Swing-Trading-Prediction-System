@@ -80,6 +80,20 @@ class Config:
     # don't also multiply by cfg.ensemble_size unless explicitly raised.
     quantile_ensemble_size: int = 1
 
+    # --- learning-to-rank (LambdaMART) -----------------------------------
+    # When True the model trains XGBoost's rank:ndcg objective with query
+    # group = date instead of binary:logistic. This optimises the
+    # cross-sectional ordering the strategy actually trades (top-quintile long
+    # basket) rather than P(up-move) selected post-hoc on Spearman IC — closing
+    # the train/select divergence noted in docs/xgboost-model-architecture.md.
+    # Default False so the frozen classifier baseline + tests stay reproducible;
+    # the weekly Colab notebook flips it on. Inert with dynamic_horizon_enabled
+    # (the quantile-surface path owns scoring there).
+    ranker_enabled:        bool = False
+    ranker_objective:      str  = "rank:ndcg"   # or "rank:pairwise"
+    ranker_relevance_bins: int  = 8             # graded relevance buckets per date
+    ranker_topk:           int  = 0             # 0 = full NDCG; else focus on top-k names
+
     # --- model -----------------------------------------------------------
     xgb_n_trials: int = 50               # Optuna trials
     xgb_early_stopping: int = 50
@@ -189,6 +203,12 @@ class Config:
         if "signal_target_atr_mult" in r: flat["signal_target_atr_mult"] = r["signal_target_atr_mult"]
         reg = data.get("registry", {})
         if "keep_bundles" in reg:    flat["keep_bundles"] = reg["keep_bundles"]
+
+        rk = data.get("ranker", {})
+        if "enabled" in rk:        flat["ranker_enabled"] = rk["enabled"]
+        if "objective" in rk:      flat["ranker_objective"] = rk["objective"]
+        if "relevance_bins" in rk: flat["ranker_relevance_bins"] = rk["relevance_bins"]
+        if "topk" in rk:           flat["ranker_topk"] = rk["topk"]
 
         dh = data.get("dynamic_horizon", {})
         if "enabled" in dh:           flat["dynamic_horizon_enabled"] = dh["enabled"]

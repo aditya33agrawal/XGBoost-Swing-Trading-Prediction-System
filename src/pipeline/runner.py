@@ -32,14 +32,15 @@ from src.data.ingestion import fetch_prices, fetch_index_prices, UNIVERSE
 from src.data.storage import init_db, upsert_prices, upsert_index, load_prices, save_parquet
 from src.data.validation import run_all_gates, DataQualityError
 from src.features.engineer import build_features
-from src.labels.targets import add_labels, forward_log_return_grid
+from src.labels.targets import add_labels, forward_log_return_grid, cross_sectional_relevance
 from src.labels.weights import sample_weights
 from src.models.trainer import (
     train_xgb, train_xgb_bag, predict_bag, tune_hyperparameters, fit_final_model,
-    _BASE_PARAMS_CLF, _BASE_PARAMS_REG, _get_xgb,
+    _BASE_PARAMS_CLF, _BASE_PARAMS_REG, _BASE_PARAMS_RANKER, _get_xgb,
     set_device, apply_device, get_device,
     train_quantile_surface, predict_surface, _QUANTILE_BASE_PARAMS,
     train_quantile_model_no_es,
+    train_xgb_bag_ranker, train_xgb_ranker_no_es,
 )
 from src.models.horizon_selection import select_horizon, diagnose_horizon_distribution
 from src.models.calibration import TimeOrderedCalibrator
@@ -184,14 +185,27 @@ def _walk_forward_predict(
         # than trusting one noisy point estimate — directly targets the
         # run-to-run OOF IC instability seen across retrains.
         try:
-            models = train_xgb_bag(
-                X_tr, y_tr, X_vl, y_vl,
-                params=best_params,
-                sample_weight=sw_tr,
-                early_stopping=cfg.xgb_early_stopping,
-                task=task,
-                n_seeds=cfg.ensemble_size,
-            )
+            if task == "ranking":
+                # Query group = date.  LambdaMART forms its pairwise gradient
+                # within a date, which is exactly the cross-sectional ordering
+                # the backtest longs (top quintile per date).
+                models = train_xgb_bag_ranker(
+                    X_tr, y_tr, train_df["date"].to_numpy(),
+                    X_vl, y_vl, val_df["date"].to_numpy(),
+                    params=best_params,
+                    sample_weight=sw_tr,
+                    early_stopping=cfg.xgb_early_stopping,
+                    n_seeds=cfg.ensemble_size,
+                )
+            else:
+                models = train_xgb_bag(
+                    X_tr, y_tr, X_vl, y_vl,
+                    params=best_params,
+                    sample_weight=sw_tr,
+                    early_stopping=cfg.xgb_early_stopping,
+                    task=task,
+                    n_seeds=cfg.ensemble_size,
+                )
         except Exception as e:
             logger.warning("training failed at %s: %s", rebal_date, e)
             return step, None, None
@@ -458,7 +472,26 @@ def predict_latest(
     xgb = _get_xgb()
     sw_tr = sw[df_train.index] if sw is not None else None
 
-    if task == "classification":
+    if task == "ranking":
+        # Final LambdaMART fit on all labeled data (no early stopping — a tiny
+        # val window collapses best_iteration to 0 and flattens scores, same as
+        # the classifier path). Query group = date; raw ranking score is the
+        # cross-sectional ordering used for top-quintile selection below.
+        model = train_xgb_ranker_no_es(
+            df_train[feature_cols], df_train[target_col], df_train["date"].to_numpy(),
+            params=params_no_es, sample_weight=sw_tr,
+        )
+        raw_scores = model.predict(latest_df[feature_cols])
+        # Min-max the ranking score into (0,1) cross-sectionally and store it in
+        # the existing `prob_up` slot.  Every downstream consumer (live IC
+        # tracking, drift, persistence, paper trader, the notebook print) keys
+        # off `prob_up`; Spearman IC is invariant to this monotonic rescale, so
+        # the ranking — and the IC it earns — is preserved exactly while the
+        # stored value stays in a sane, probability-like range.
+        lo, hi = float(np.min(raw_scores)), float(np.max(raw_scores))
+        scores = (raw_scores - lo) / (hi - lo) if hi > lo else np.full_like(raw_scores, 0.5)
+        signal_col = "prob_up"
+    elif task == "classification":
         y_tr = (df_train[target_col] == 1).astype(int)
         model = xgb.XGBClassifier(**params_no_es)
         model.fit(df_train[feature_cols], y_tr, sample_weight=sw_tr, verbose=False)
@@ -663,6 +696,17 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     df = add_labels(df, cfg.horizon, cfg.label_type)
     target_col = "target"
 
+    # Learning-to-Rank (LambdaMART): train rank:ndcg on per-date relevance
+    # grades instead of P(up-move). add_labels always produces `fwd_ret`, so the
+    # relevance is derived from it regardless of label_type. Mutually exclusive
+    # with the dynamic-horizon quantile-surface path (that owns scoring).
+    if cfg.ranker_enabled and not cfg.dynamic_horizon_enabled:
+        task = "ranking"
+        df = cross_sectional_relevance(df, bins=cfg.ranker_relevance_bins)
+        target_col = "rank_rel"
+        print(f"  Learning-to-Rank: per-date relevance grades 0..{cfg.ranker_relevance_bins - 1} "
+              f"(objective={cfg.ranker_objective})")
+
     # Dynamic-horizon surface (docs/dynamic-horizon-rr-plan.md Phase 1) — adds
     # fwd_ret_{h} per h in cfg.horizon_grid alongside the legacy `target`/
     # `fwd_ret` columns above. Purely additive; inert unless the flag is on.
@@ -718,9 +762,22 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         best_params = apply_device(best_params)
         logger.info("Loaded saved params from %s (device=%s)", _params_path, get_device())
     else:
-        base = _BASE_PARAMS_CLF if task == "classification" else _BASE_PARAMS_REG
-        best_params = apply_device(base)
+        if task == "ranking":
+            base = _BASE_PARAMS_RANKER
+        elif task == "classification":
+            base = _BASE_PARAMS_CLF
+        else:
+            base = _BASE_PARAMS_REG
+        best_params = apply_device(dict(base))
         logger.info("Skipping Optuna — using default params on device=%s", get_device())
+
+    # Honour the configured ranking objective / top-k focus on whichever params
+    # we ended up with (tuned, loaded, or default).
+    if task == "ranking":
+        best_params["objective"] = cfg.ranker_objective
+        if cfg.ranker_topk and cfg.ranker_topk > 0:
+            best_params["eval_metric"] = f"ndcg@{cfg.ranker_topk}"
+            best_params["lambdarank_num_pair_per_sample"] = int(cfg.ranker_topk)
 
     # ------------------------------------------------------------------
     # Phase 3b: Probability calibration on the final validation slice

@@ -46,6 +46,60 @@ def forward_log_return_grid(df: pd.DataFrame, grid: list[int]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 1c. Cross-sectional relevance grades (Learning-to-Rank target)
+# ---------------------------------------------------------------------------
+def cross_sectional_relevance(
+    df: pd.DataFrame,
+    bins: int = 8,
+    ret_col: str = "fwd_ret",
+    out_col: str = "rank_rel",
+    date_col: str = "date",
+) -> pd.DataFrame:
+    """Add an integer relevance grade in [0, bins-1] per (date) from ``ret_col``.
+
+    The LambdaMART ranker (objective="rank:ndcg") needs a graded relevance
+    label per query group; here the query group is a date and the relevance is
+    "how good was this stock's forward return relative to its peers *that day*"
+    — exactly the cross-sectional ordering the strategy trades.
+
+    Implementation:
+      - Within each date, sort by ``ret_col`` and assign integer buckets
+        0..bins-1 (higher grade = better forward return).
+      - ``pd.qcut`` is used when there are enough distinct values; it falls back
+        to a dense rank scaled into [0, bins-1] for short/degenerate days (e.g.
+        the most-recent dates where few tickers are labeled, or ties).
+      - Rows where ``ret_col`` is NaN (the last ``h`` bars per ticker) keep a
+        NaN grade and are dropped before training — same contract as the other
+        label columns. The grade is computed strictly within a date, so no
+        information crosses the train/test boundary.
+
+    Returns a copy of ``df`` with ``out_col`` added.
+    """
+    df = df.copy()
+
+    def _grade(s: pd.Series) -> pd.Series:
+        valid = s.dropna()
+        out = pd.Series(np.nan, index=s.index)
+        n = len(valid)
+        if n == 0:
+            return out
+        if n < 2:
+            out.loc[valid.index] = 0.0
+            return out
+        # Dense rank in [0, 1] → scale to [0, bins-1] integer grades. This is
+        # robust to ties and to days with fewer than `bins` tickers, where
+        # qcut would raise; it yields the same monotonic ordering qcut targets.
+        r = valid.rank(method="first")  # 1..n, breaks ties by order
+        grade = np.floor((r - 1) / n * bins).astype(int)
+        grade = np.clip(grade, 0, bins - 1)
+        out.loc[valid.index] = grade.astype(float)
+        return out
+
+    df[out_col] = df.groupby(date_col, sort=False)[ret_col].transform(_grade)
+    return df
+
+
+# ---------------------------------------------------------------------------
 # 2. Triple-barrier label (classification)
 # ---------------------------------------------------------------------------
 def triple_barrier_labels(
