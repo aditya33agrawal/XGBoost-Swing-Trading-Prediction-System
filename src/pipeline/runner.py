@@ -442,7 +442,7 @@ def predict_latest(
     sw: np.ndarray,
     best_params: dict,
     calibrator: TimeOrderedCalibrator | None = None,
-    top_n: int = 10,
+    top_n: int | None = None,
     return_model: bool = False,
 ):
     """Retrain on all labeled data and score the actual latest price date.
@@ -532,7 +532,9 @@ def predict_latest(
         if regime_val < 0:
             out["signal"] = "NEUTRAL"
 
-    result = out.head(top_n)
+    # top_n=None → return the full scored universe (signal already marks the
+    # top quintile LONG, the rest NEUTRAL); an int caps to the top-N rows.
+    result = out if top_n is None else out.head(top_n)
     return (result, model) if return_model else result
 
 
@@ -547,7 +549,7 @@ def predict_latest_surface(
     df_full: pd.DataFrame,
     feature_cols: list[str],
     cfg: Config,
-    top_n: int = 10,
+    top_n: int | None = None,
     return_model: bool = False,
 ):
     grid = list(cfg.horizon_grid)
@@ -600,7 +602,8 @@ def predict_latest_surface(
         if regime_val < 0:
             out["signal"] = "NEUTRAL"
 
-    result = out.head(top_n)
+    # top_n=None → return the full scored universe (see predict_latest).
+    result = out if top_n is None else out.head(top_n)
     return (result, surface_models) if return_model else result
 
 
@@ -897,7 +900,8 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     print("\n[Phase 5] Generating latest signals …")
     if cfg.dynamic_horizon_enabled:
         signals, final_model = predict_latest_surface(
-            df_full=df_full, feature_cols=feature_cols, cfg=cfg, return_model=True,
+            df_full=df_full, feature_cols=feature_cols, cfg=cfg,
+            top_n=cfg.signals_top_n, return_model=True,
         )
     else:
         signals, final_model = predict_latest(
@@ -910,6 +914,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             sw=sw,
             best_params=best_params,
             calibrator=calibrator,
+            top_n=cfg.signals_top_n,
             return_model=True,
         )
 

@@ -123,6 +123,12 @@ class Config:
     # --- outputs ---------------------------------------------------------
     output_dir:    str  = "outputs"
     save_outputs:  bool = True           # write signals JSON + CSV on every run
+    # How many of the ranked latest-bar names to surface/persist. None = the
+    # full scored universe (every Nifty 200 name gets a prob_up + signal), so
+    # the dashboard can show the whole prediction surface, not just the traded
+    # top-quintile basket. signal == "LONG" still marks only the top quintile;
+    # the rest carry signal == "NEUTRAL". An int caps it to the top-N rows.
+    signals_top_n: int | None = None
 
     # --- paper trading ---------------------------------------------------
     paper_trade:       bool  = True

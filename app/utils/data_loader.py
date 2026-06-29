@@ -80,8 +80,15 @@ def _read_json(filename: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def load_signals() -> pd.DataFrame:
-    """Latest predictions (today or most recent signal date)."""
-    rows = _fetch("predictions", order_by="-signal_date", limit=200)
+    """Latest predictions (today or most recent signal date).
+
+    The pipeline now persists the full scored universe (~200 names) per run,
+    so the fetch limit must comfortably exceed one run's row count or the
+    newest run gets truncated. We then narrow to the single most-recent run
+    (latest signal_date, then latest run_id within it) so a same-day rerun
+    can never show a mix of two runs' rows.
+    """
+    rows = _fetch("predictions", order_by="-signal_date", limit=1000)
     if not rows:
         # CSV fallback
         csv = _OUTPUTS / "signals_latest.csv"
@@ -105,6 +112,10 @@ def load_signals() -> pd.DataFrame:
     if "signal_date" in df.columns:
         latest = df["signal_date"].max()
         df = df[df["signal_date"] == latest]
+        # If two runs share that date (e.g. a same-day rerun), keep only the
+        # most recent run so the table never mixes runs.
+        if "run_id" in df.columns and df["run_id"].nunique() > 1:
+            df = df[df["run_id"] == df["run_id"].max()]
     return df.reset_index(drop=True)
 
 

@@ -165,8 +165,14 @@ def save_signals(signals: pd.DataFrame, output_dir: str = "outputs") -> Path:
 # ---------------------------------------------------------------------------
 # Pretty-print
 # ---------------------------------------------------------------------------
-def print_signal_table(signals: pd.DataFrame, title: str = "SIGNALS") -> None:
-    """Print a clean, aligned signal table."""
+def print_signal_table(signals: pd.DataFrame, title: str = "SIGNALS",
+                        max_rows: int = 25) -> None:
+    """Print a clean, aligned signal table.
+
+    Only the first ``max_rows`` (highest-ranked) rows are printed to keep the
+    console/notebook readable when the full scored universe (~200 names) is
+    surfaced; the footer still reports the true LONG/NEUTRAL totals.
+    """
     w_total = 90
     print(f"\n{'─' * w_total}")
     print(f"  {title}")
@@ -194,7 +200,7 @@ def print_signal_table(signals: pd.DataFrame, title: str = "SIGNALS") -> None:
     print(header)
     print(sep)
 
-    for _, row in signals.iterrows():
+    for _, row in signals.head(max_rows).iterrows():
         line = ""
         for c in cols:
             v = row[c]
@@ -205,6 +211,9 @@ def print_signal_table(signals: pd.DataFrame, title: str = "SIGNALS") -> None:
             else:
                 line += str(v).rjust(w)
         print(line)
+
+    if len(signals) > max_rows:
+        print(f"  … {len(signals) - max_rows} more rows (showing top {max_rows})".rjust(w_total))
 
     print(sep)
     long_n = int((signals.get("signal", pd.Series(dtype=str)) == "LONG").sum())

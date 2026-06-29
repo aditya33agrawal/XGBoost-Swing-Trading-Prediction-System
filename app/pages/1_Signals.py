@@ -71,6 +71,11 @@ display_cols = [c for c in [
 ] if c in df.columns]
 
 view = df[display_cols].copy()
+# The pipeline now surfaces the full scored universe (~200 names), so order the
+# table by confidence — LONG basket (top quintile) first, then NEUTRAL — rather
+# than whatever order the DB returned them in.
+if "prob_up" in view.columns:
+    view = view.sort_values("prob_up", ascending=False).reset_index(drop=True)
 
 def _color_signal(val):
     if val == "LONG":
