@@ -30,9 +30,14 @@ import pandas as pd
 from src.config import Config
 from src.data.ingestion import fetch_prices, fetch_index_prices, UNIVERSE
 from src.data.storage import init_db, upsert_prices, upsert_index, load_prices, save_parquet
-from src.data.validation import run_all_gates, DataQualityError
+from src.data.validation import (
+    run_all_gates, check_index_freshness, run_index_gates,
+    check_latest_bar_coverage, summarize_data_quality, DataQualityError,
+)
 from src.features.engineer import build_features
-from src.labels.targets import add_labels, forward_log_return_grid, cross_sectional_relevance
+from src.labels.targets import (
+    add_labels, forward_log_return_grid, cross_sectional_relevance, residualize_fwd_ret,
+)
 from src.labels.weights import sample_weights
 from src.models.trainer import (
     train_xgb, train_xgb_bag, predict_bag, tune_hyperparameters, fit_final_model,
@@ -41,6 +46,7 @@ from src.models.trainer import (
     train_quantile_surface, predict_surface, _QUANTILE_BASE_PARAMS,
     train_quantile_model_no_es,
     train_xgb_bag_ranker, train_xgb_ranker_no_es,
+    train_xgb_bag_no_es, train_xgb_bag_ranker_no_es,
 )
 from src.models.horizon_selection import select_horizon, diagnose_horizon_distribution
 from src.models.calibration import TimeOrderedCalibrator
@@ -456,9 +462,21 @@ def predict_latest(
 
     # Actual latest date in the price feed (may be horizon bars beyond last label)
     latest_date = df_full["date"].max()
-    latest_df = df_full[df_full["date"] == latest_date].dropna(subset=feature_cols)
+    latest_raw = df_full[df_full["date"] == latest_date]
+    latest_df = latest_raw.dropna(subset=feature_cols)
 
     if df_train.empty or latest_df.empty:
+        # Diagnose the common cause: a feature that is NaN for every ticker on the
+        # latest date (e.g. a missing index/VIX bar) silently wipes the whole
+        # cross-section. Surface exactly which columns did it instead of emitting
+        # a bare "no signals" with no explanation.
+        if not latest_raw.empty and latest_df.empty:
+            all_nan = [c for c in feature_cols if latest_raw[c].isna().all()]
+            logger.warning(
+                "predict_latest: latest date %s had %d tickers but 0 survived "
+                "dropna(feature_cols). Columns all-NaN on latest date: %s",
+                latest_date, len(latest_raw), all_nan or "(none — per-ticker NaNs)",
+            )
         empty = pd.DataFrame(columns=["ticker", "score", "signal"])
         return (empty, None) if return_model else empty
 
@@ -469,19 +487,25 @@ def predict_latest(
     params_no_es = {k: v for k, v in best_params.items() if k != "early_stopping_rounds"}
     params_no_es = apply_device(params_no_es)
 
-    xgb = _get_xgb()
     sw_tr = sw[df_train.index] if sw is not None else None
+
+    # Multi-seed bagging for the live model too (Tier 2.8) — the walk-forward OOF
+    # loop already averages `cfg.ensemble_size` seeds, but the live final fit was
+    # a single draw, the main driver of run-to-run signal swings. n_seeds=1
+    # reduces to the original single fit, so default behaviour is unchanged.
+    n_seeds = max(1, getattr(cfg, "ensemble_size", 1))
 
     if task == "ranking":
         # Final LambdaMART fit on all labeled data (no early stopping — a tiny
         # val window collapses best_iteration to 0 and flattens scores, same as
         # the classifier path). Query group = date; raw ranking score is the
         # cross-sectional ordering used for top-quintile selection below.
-        model = train_xgb_ranker_no_es(
+        bag = train_xgb_bag_ranker_no_es(
             df_train[feature_cols], df_train[target_col], df_train["date"].to_numpy(),
-            params=params_no_es, sample_weight=sw_tr,
+            params=params_no_es, sample_weight=sw_tr, n_seeds=n_seeds,
         )
-        raw_scores = model.predict(latest_df[feature_cols])
+        model = bag[0]   # representative member for feature_importances / bundle
+        raw_scores = predict_bag(bag, latest_df[feature_cols], task="ranking")
         # Min-max the ranking score into (0,1) cross-sectionally and store it in
         # the existing `prob_up` slot.  Every downstream consumer (live IC
         # tracking, drift, persistence, paper trader, the notebook print) keys
@@ -492,21 +516,24 @@ def predict_latest(
         scores = (raw_scores - lo) / (hi - lo) if hi > lo else np.full_like(raw_scores, 0.5)
         signal_col = "prob_up"
     elif task == "classification":
-        y_tr = (df_train[target_col] == 1).astype(int)
-        model = xgb.XGBClassifier(**params_no_es)
-        model.fit(df_train[feature_cols], y_tr, sample_weight=sw_tr, verbose=False)
-        raw_probs = model.predict_proba(latest_df[feature_cols])[:, 1]
+        bag = train_xgb_bag_no_es(
+            df_train[feature_cols], df_train[target_col],
+            params=params_no_es, sample_weight=sw_tr, task="classification", n_seeds=n_seeds,
+        )
+        model = bag[0]
         # Do NOT apply calibrator here.  The calibrator was fitted on a different
         # model's output (trained on the HPT subset); applying it to a model trained
         # on the full dataset maps all scores to near-constant values, collapsing
         # the ranking.  Raw probabilities preserve cross-sectional ordering.
-        scores = raw_probs
+        scores = predict_bag(bag, latest_df[feature_cols], task="classification")
         signal_col = "prob_up"
     else:
-        model = xgb.XGBRegressor(**params_no_es)
-        model.fit(df_train[feature_cols], df_train[target_col],
-                  sample_weight=sw_tr, verbose=False)
-        scores = model.predict(latest_df[feature_cols])
+        bag = train_xgb_bag_no_es(
+            df_train[feature_cols], df_train[target_col],
+            params=params_no_es, sample_weight=sw_tr, task="regression", n_seeds=n_seeds,
+        )
+        model = bag[0]
+        scores = predict_bag(bag, latest_df[feature_cols], task="regression")
         signal_col = "pred_return"
 
     out = latest_df[["ticker"]].copy()
@@ -672,6 +699,14 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     print("\n[Phase 1b] Validation gates …")
     try:
         price_df = run_all_gates(price_df, end=cfg.end)
+        # Index/VIX feed — OHLCV sanity (§2b.6) + alignment with the stock feed
+        # (the upstream cause of the zero-signal incident).
+        run_index_gates(index_df)
+        check_index_freshness(price_df, index_df)
+        # Per-ticker latest-bar coverage (§2b.7) + a persisted data-quality
+        # snapshot (§2b.9) so feed degradation trends rather than surprising us.
+        _stale_latest = check_latest_bar_coverage(price_df)
+        _data_quality = summarize_data_quality(price_df, index_df, _stale_latest)
     except DataQualityError as e:
         print(f"  ABORTED: {e}")
         raise
@@ -698,6 +733,24 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     task = "classification" if cfg.label_type == "triple_barrier" else "regression"
     df = add_labels(df, cfg.horizon, cfg.label_type)
     target_col = "target"
+    eval_target_col = "fwd_ret"   # signal the HPO ranks against (real return by default)
+
+    # Market-neutral target (Tier 2.6): train/tune on the index-residual forward
+    # return so the model learns stock-picking, not market-timing. Scoped to the
+    # plain regression path (the triple-barrier label is an ATR-path construct
+    # and the per-date ranker target is invariant to a per-date shift); reported
+    # IC and backtest P&L stay on the REAL `fwd_ret`, so metrics stay honest.
+    if cfg.market_neutral_label:
+        if (cfg.label_type == "fwd_ret" and not cfg.ranker_enabled
+                and not cfg.dynamic_horizon_enabled and not index_df.empty):
+            df = residualize_fwd_ret(df, index_df, cfg.horizon)
+            df["target"] = df["fwd_ret_resid"]
+            eval_target_col = "fwd_ret_resid"
+            print("  Market-neutral target: training/tuning on index-residual fwd return "
+                  "(IC + backtest P&L stay on real returns)")
+        else:
+            print("  market_neutral_label set but IGNORED — needs label_type=fwd_ret, "
+                  "no ranker / dynamic-horizon, and an index feed")
 
     # Learning-to-Rank (LambdaMART): train rank:ndcg on per-date relevance
     # grades instead of P(up-move). add_labels always produces `fwd_ret`, so the
@@ -747,15 +800,20 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     print(f"\n[Phase 3] Hyperparameter search ({cfg.xgb_n_trials} Optuna trials) …")
     # Try to load saved params when skipping Optuna (fast-signals mode)
     _params_path = Path(cfg.params_path)
+    cv_best_score: float | None = None   # best CV IC-IR, for the CV→OOF gap report
     if cfg.xgb_n_trials > 0 and len(cv_splits) >= 2:
+        _hpo_meta: dict = {}
         best_params = tune_hyperparameters(
             df_hpt, feature_cols, target_col,
             splits=cv_splits,
             task=task,
             n_trials=cfg.xgb_n_trials,
             sample_weights=sw_hpt,
+            eval_target_col=eval_target_col,
             max_workers=cfg.max_parallel_fits,
+            out_meta=_hpo_meta,
         )
+        cv_best_score = _hpo_meta.get("cv_best_score")
         # Persist so fast-signals runs can reuse them
         _params_path.parent.mkdir(parents=True, exist_ok=True)
         _params_path.write_text(json.dumps(best_params, indent=2))
@@ -824,7 +882,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     # Phase 4: Walk-forward OOF predictions + backtest
     # ------------------------------------------------------------------
-    stats: dict = {}
+    stats: dict = {"data_quality": _data_quality}   # §2b.9 snapshot persisted to metadata
     oof_preds: pd.DataFrame = pd.DataFrame()
     sens: pd.DataFrame = pd.DataFrame()
 
@@ -861,6 +919,31 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
                 f"{ic_ir_stats['t_stat']:.2f}  (n_days={ic_ir_stats['n_days']})"
             )
 
+            # CV→OOF generalization gap (doc §2.2.3). HPO now optimises CV
+            # IC-IR, so compare it to the walk-forward OOF IC-IR on the SAME
+            # scale. A large positive gap means the search picked a config that
+            # fit the CV folds but didn't generalise — an overfit alarm, not a
+            # deploy-anyway. (cv_best_score is None in fast-signals/loaded-params
+            # runs, which don't re-run the search.)
+            oof_ic_ir = ic_ir_stats.get("ic_ir")
+            if cv_best_score is not None and oof_ic_ir is not None and not np.isnan(oof_ic_ir):
+                gap = cv_best_score - oof_ic_ir
+                stats_gap_alarm = (
+                    cv_best_score > 0 and oof_ic_ir < 0.5 * cv_best_score
+                )
+                print(
+                    f"  CV→OOF IC-IR gap                     = "
+                    f"{cv_best_score:.3f} (CV) → {oof_ic_ir:.3f} (OOF) | "
+                    f"gap={gap:+.3f}"
+                    + ("  ⚠️ OVERFIT ALARM (OOF < 50% of CV)" if stats_gap_alarm else "")
+                )
+                if stats_gap_alarm:
+                    logger.warning(
+                        "CV→OOF overfit alarm: CV IC-IR=%.3f but OOF IC-IR=%.3f "
+                        "(<50%% retained) — HPO config did not generalise",
+                        cv_best_score, oof_ic_ir,
+                    )
+
         # Phase 4b: Cost-adjusted backtest
         print("\n[Phase 4b] Backtest with Indian transaction costs …")
         stats = run_backtest(oof_preds, cfg)   # returns a fresh dict
@@ -871,6 +954,11 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             stats["oof_ic_ir"] = ic_ir_stats.get("ic_ir")
             stats["oof_ic_t_stat"] = ic_ir_stats.get("t_stat")
             stats["oof_ic_n_days"] = ic_ir_stats.get("n_days")
+            if cv_best_score is not None:
+                stats["cv_best_ic_ir"] = cv_best_score
+                _oof_ir = ic_ir_stats.get("ic_ir")
+                if _oof_ir is not None and not np.isnan(_oof_ir):
+                    stats["cv_oof_ic_ir_gap"] = cv_best_score - _oof_ir
 
         # Deflated Sharpe (multiple-testing correction for cfg.xgb_n_trials
         # Optuna trials) + block-bootstrap CI on Sharpe/CAGR/maxDD — plan
@@ -1060,24 +1148,59 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             logger.warning("Backtest report failed (non-fatal): %s", exc)
 
     # ------------------------------------------------------------------
-    # Phase 6: Paper trading — exits only. New positions are NEVER opened
-    # automatically by the pipeline; only a manual "Take Trade" click in the
-    # UI (app/utils/writer.open_trade) opens a position, and only at CMP
-    # during market hours. This phase just settles stop / target / horizon
-    # exits on positions that were opened that way.
+    # Phase 6: Paper trading. Exits (stop/target/expiry) always settle here.
+    # Entries: manual via the UI "Take Trade" button by default; when
+    # cfg.auto_open_signals is on (the weekly ₹20k paper run), the trade
+    # planner's BUY rows are opened automatically so the 2-month paper window
+    # runs hands-off. A whole-share, cost-itemised trade plan is written on
+    # every run regardless, as the downloadable execution artifact.
     # ------------------------------------------------------------------
     if cfg.paper_trade:
-        print("\n[Phase 6] Paper trading — settling exits (no auto-entries) …")
+        from src.trading.trade_planner import build_trade_plan, save_trade_plan, print_trade_plan
+
+        print("\n[Phase 6] Paper trading …")
         portfolio = PaperPortfolio.load(cfg.portfolio_path)
         portfolio.max_positions     = cfg.max_positions
         portfolio.position_size_pct = cfg.position_size_pct
+        portfolio.slippage_bps      = getattr(cfg, "slippage_bps", portfolio.slippage_bps)
         if portfolio.initial_capital == 1_000_000 and cfg.initial_capital != 1_000_000:
             portfolio.initial_capital = cfg.initial_capital
 
-        closed = portfolio.update(price_df)
+        held = {t.ticker for t in portfolio.open_trades}
+
+        # Turnover hysteresis: an expiring position whose ticker still ranks
+        # above the exit band is rolled, not sold-and-rebought (§Phase 4.20).
+        keep: set[str] = set()
+        if getattr(cfg, "hysteresis_enabled", False) and not signals.empty:
+            _score = next((c for c in ("prob_up", "pred_return") if c in signals.columns), None)
+            if _score:
+                _rank = signals[_score].rank(pct=True)
+                _above = set(signals.loc[_rank >= getattr(cfg, "exit_rank_pct", 0.60), "ticker"])
+                keep = held & _above
+
+        closed = portfolio.update(price_df, keep_tickers=keep)
         if closed:
             print(f"  Closed {len(closed)} position(s): "
                   f"{[(t.ticker, t.exit_reason) for t in closed]}")
+
+        # Build + persist the executable weekly plan (whole shares, real costs)
+        if not signals.empty:
+            plan = build_trade_plan(
+                signals, cfg,
+                cash=portfolio.cash,
+                held_tickers={t.ticker for t in portfolio.open_trades},
+            )
+            if cfg.save_outputs and not plan.empty:
+                save_trade_plan(plan, cfg.output_dir)
+            print_trade_plan(plan)
+
+            if getattr(cfg, "auto_open_signals", False):
+                as_of = price_df["date"].max()
+                as_of = str(as_of.date()) if hasattr(as_of, "date") else str(as_of)
+                opened = portfolio.open_from_plan(plan, entry_date=as_of)
+                if opened:
+                    print(f"  Auto-opened {len(opened)} position(s): "
+                          f"{[t.ticker for t in opened]}")
 
         portfolio.print_summary(price_df)
         portfolio.save(cfg.portfolio_path)
@@ -1095,8 +1218,8 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     print("Pipeline complete.")
     if not cfg.skip_backtest:
         print(
-            "NOTE: On synthetic/low-signal data, near-zero Sharpe after costs is "
-            "the correct result.  Real edge, if it exists, is small (52–56% accuracy)."
+            "NOTE: On a near-efficient large-cap universe, a small edge after costs "
+            "is the expected result.  Real edge, if it exists, is modest (52–56% accuracy)."
         )
     print("=" * 72)
     return stats, signals

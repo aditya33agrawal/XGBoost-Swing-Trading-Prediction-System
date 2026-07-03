@@ -28,6 +28,15 @@ class Config:
     label_type: Literal["fwd_ret", "triple_barrier"] = "triple_barrier"
     barrier_up_mult: float = 2.0          # ×ATR upper barrier (label only)
     barrier_dn_mult: float = 2.0          # ×ATR lower barrier (label only)
+    # Market-neutral training target (fixes doc Tier 2.6 / plan A6): when True,
+    # the model trains/ranks on the index-residual forward return
+    # (stock_fwd_ret − nifty_fwd_ret over the same horizon) so it learns
+    # stock-picking, not market-timing — directly attacking the drawdown the
+    # external regime overlay only patches. Reported IC and backtest P&L stay on
+    # REAL returns (the strategy still earns real, not residual, returns), so all
+    # metrics remain honest. Default False keeps the existing contract; flip on a
+    # Colab A/B run before trusting. Inert when no index feed is present.
+    market_neutral_label: bool = False
 
     # --- signal exit levels (paper/live trades — decoupled from label) ---
     # The label barriers above define the classification target; they are NOT
@@ -50,6 +59,20 @@ class Config:
     # weight (plan §Phase 4.19) — targets weak Calmar/drawdown without
     # touching the underlying alpha signal. False = old equal-weight behaviour.
     conviction_weighted_sizing: bool = True
+    # Concentrated top-K book (small-capital mode). 0 = legacy behaviour:
+    # the backtest longs the whole top quintile (~40 names on Nifty 200) —
+    # impossible to actually hold on a ₹20k account. >0 = the backtest longs
+    # only the K highest-scoring names each rebalance, which is what the live
+    # account can genuinely trade, so backtest and live P&L finally describe
+    # the same strategy. Pair with max_positions (live) = top_k_positions.
+    top_k_positions: int = 0
+    # Turnover hysteresis (plan §Phase 4.20): a held name exits only when its
+    # cross-sectional score-rank percentile drops below exit_rank_pct; a new
+    # name enters only above entry_rank_pct. Damps quintile-boundary churn —
+    # each avoided round trip saves the full small-account cost (~0.9%).
+    hysteresis_enabled: bool = False
+    entry_rank_pct: float = 0.80          # new entries must rank above this
+    exit_rank_pct:  float = 0.60          # held names stay until below this
 
     # --- risk overlay ----------------------------------------------------
     # Go flat (no new longs) when the Nifty index is below its long SMA.
@@ -61,6 +84,17 @@ class Config:
 
     # --- costs -----------------------------------------------------------
     cost_bps_per_side: float = 20.0       # ~40 bps round-trip (STT+slip)
+    slippage_bps: float = 10.0            # one-way slippage per fill
+    # When True, the backtest's round-trip cost fraction is evaluated at the
+    # ACTUAL per-position size (initial_capital × position_size_pct) instead
+    # of a hypothetical ₹1,00,000 trade. The flat DP charge makes small
+    # positions much more expensive in % terms (~0.85% RT at ₹4k vs ~0.25%
+    # at ₹1L) — a ₹20k account must clear a materially higher edge bar.
+    capital_aware_costs: bool = True
+    # Trade-planner edge screen: expected move to target must be at least this
+    # multiple of the round-trip breakeven move, otherwise the trade is not
+    # worth its costs at this account size and is dropped from the plan.
+    min_edge_ratio: float = 2.0
 
     # --- dynamic horizon & RR (docs/dynamic-horizon-rr-plan.md) -----------
     # Master switch: everything below is inert when False. The legacy
@@ -131,11 +165,19 @@ class Config:
     signals_top_n: int | None = None
 
     # --- paper trading ---------------------------------------------------
+    # Small-capital defaults (₹20k account, 5 concentrated positions of ~₹3.8k
+    # each, ~5% held back as a cash buffer for charges). The old ₹10L/10-name
+    # profile is still reachable by overriding these three knobs.
     paper_trade:       bool  = True
     portfolio_path:    str   = "outputs/portfolio.json"
-    initial_capital:   float = 1_000_000    # INR
-    position_size_pct: float = 0.05         # 5 % of portfolio per trade
-    max_positions:     int   = 10
+    initial_capital:   float = 20_000       # INR
+    position_size_pct: float = 0.19         # ~₹3.8k per position at ₹20k
+    max_positions:     int   = 5
+    # Auto-open paper positions from the weekly trade plan (top-K affordable
+    # LONG signals). Default off: entries stay manual (UI "Take Trade"). The
+    # weekly retrain flips this on so the 2-month paper-trading run is fully
+    # hands-off — entries, exits, costs and ledger all recorded automatically.
+    auto_open_signals: bool  = False
 
     # --- fast-signals mode -----------------------------------------------
     skip_backtest: bool = False   # skip walk-forward + backtest, only gen signals
@@ -190,6 +232,7 @@ class Config:
         flat: dict = {}
         if "horizon" in data:    flat["horizon"] = data["horizon"]
         if "label_type" in data: flat["label_type"] = data["label_type"]
+        if "market_neutral_label" in data: flat["market_neutral_label"] = data["market_neutral_label"]
         b = data.get("barriers", {})
         if "up_mult" in b: flat["barrier_up_mult"] = b["up_mult"]
         if "dn_mult" in b: flat["barrier_dn_mult"] = b["dn_mult"]
@@ -200,6 +243,8 @@ class Config:
             if k in data: flat[k] = data[k]
         c = data.get("costs", {})
         if "cost_bps_per_side" in c: flat["cost_bps_per_side"] = c["cost_bps_per_side"]
+        if "slippage_bps" in c:        flat["slippage_bps"] = c["slippage_bps"]
+        if "capital_aware_costs" in c: flat["capital_aware_costs"] = c["capital_aware_costs"]
         r = data.get("risk", {})
         if "max_positions" in r:     flat["max_positions"] = r["max_positions"]
         if "position_size_pct" in r: flat["position_size_pct"] = r["position_size_pct"]
@@ -207,6 +252,11 @@ class Config:
         if "regime_filter" in r:     flat["regime_filter"] = r["regime_filter"]
         if "signal_stop_atr_mult" in r:   flat["signal_stop_atr_mult"] = r["signal_stop_atr_mult"]
         if "signal_target_atr_mult" in r: flat["signal_target_atr_mult"] = r["signal_target_atr_mult"]
+        if "top_k_positions" in r:   flat["top_k_positions"] = r["top_k_positions"]
+        if "hysteresis_enabled" in r: flat["hysteresis_enabled"] = r["hysteresis_enabled"]
+        if "entry_rank_pct" in r:    flat["entry_rank_pct"] = r["entry_rank_pct"]
+        if "exit_rank_pct" in r:     flat["exit_rank_pct"] = r["exit_rank_pct"]
+        if "auto_open_signals" in r: flat["auto_open_signals"] = r["auto_open_signals"]
         reg = data.get("registry", {})
         if "keep_bundles" in reg:    flat["keep_bundles"] = reg["keep_bundles"]
 

@@ -46,6 +46,46 @@ def forward_log_return_grid(df: pd.DataFrame, grid: list[int]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
+# 1b'. Market-neutral (index-residual) forward return — fixes doc Tier 2.6 / A6
+# ---------------------------------------------------------------------------
+def index_forward_log_return(
+    index_df: pd.DataFrame,
+    h: int,
+    index_ticker: str = "^NSEI",
+    date_col: str = "date",
+) -> pd.DataFrame:
+    """Per-date forward log-return of the index over horizon `h`.
+
+    Returns a (date, nifty_fwd_ret) frame to merge onto the stock panel. Last
+    `h` index rows are NaN, same leakage rule as `forward_log_return`.
+    """
+    nifty = index_df[index_df["ticker"] == index_ticker].sort_values(date_col)
+    fwd = np.log(nifty["close"].shift(-h) / nifty["close"])
+    return pd.DataFrame({date_col: nifty[date_col].to_numpy(), "nifty_fwd_ret": fwd.to_numpy()})
+
+
+def residualize_fwd_ret(
+    df: pd.DataFrame,
+    index_df: pd.DataFrame,
+    h: int,
+    index_ticker: str = "^NSEI",
+) -> pd.DataFrame:
+    """Add `fwd_ret_resid` = fwd_ret − index_fwd_ret (market-excess return).
+
+    Subtracting the per-date index forward return strips the market-timing
+    component from the target, leaving the idiosyncratic (stock-picking) return.
+    Note this is a per-date constant shift, so within-date cross-sectional
+    *ranking* (and hence daily IC) is unchanged; the effect is on what a pooled
+    regression target teaches the model — to bet on relative, not market,
+    direction. Requires `fwd_ret` already present.
+    """
+    idx_fwd = index_forward_log_return(index_df, h, index_ticker)
+    df = df.merge(idx_fwd, on="date", how="left")
+    df["fwd_ret_resid"] = df["fwd_ret"] - df["nifty_fwd_ret"]
+    return df
+
+
+# ---------------------------------------------------------------------------
 # 1c. Cross-sectional relevance grades (Learning-to-Rank target)
 # ---------------------------------------------------------------------------
 def cross_sectional_relevance(

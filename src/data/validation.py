@@ -86,6 +86,128 @@ def check_freshness(
         )
 
 
+def check_index_freshness(
+    price_df: pd.DataFrame,
+    index_df: pd.DataFrame,
+    index_tickers: tuple[str, ...] = ("^NSEI", "^INDIAVIX"),
+    max_lag_days: int = 4,
+) -> None:
+    """Warn when an index/VIX feed lags the stock feed on its most recent bar.
+
+    This is the upstream cause of the 2026-06-29 zero-signal incident: yfinance
+    returned stock prices through the latest date but `^INDIAVIX` (and sometimes
+    `^NSEI`) lagged a trading day, so the shared regime columns were NaN for the
+    whole latest cross-section and `predict_latest`'s dropna wiped every signal.
+    The feature layer now forward-fills these columns (no look-ahead), so this is
+    a WARNING, not a hard FAIL — but a persistent lag means the latest regime
+    value is stale and should be investigated.
+    """
+    if index_df is None or index_df.empty:
+        print("[validation] WARNING: no index data — regime/VIX features unavailable")
+        return
+    stock_latest = pd.to_datetime(price_df["date"]).max()
+    for tk in index_tickers:
+        sub = index_df[index_df["ticker"] == tk]
+        if sub.empty:
+            print(f"[validation] WARNING: index feed {tk} missing entirely")
+            continue
+        idx_latest = pd.to_datetime(sub["date"]).max()
+        lag = (stock_latest - idx_latest).days
+        if lag > max_lag_days:
+            print(
+                f"[validation] WARNING: {tk} latest bar {idx_latest.date()} lags "
+                f"stock data {stock_latest.date()} by {lag} days — regime features "
+                "will be forward-filled (last-known value) for recent dates"
+            )
+
+
+def check_latest_bar_coverage(
+    price_df: pd.DataFrame,
+    max_stale_days: int = 4,
+) -> list[str]:
+    """Warn for tickers whose most-recent bar lags the feed's global latest date.
+
+    Backlog item §2b.7. The per-ticker ``dropna`` in ``predict_latest`` silently
+    drops any name that has no row on the latest date, so one ticker stuck a few
+    days behind just vanishes from today's scoring with no trace. Surface those
+    names up front; return the stale list so the caller can record/act on it.
+    """
+    if price_df is None or price_df.empty:
+        return []
+    dates = pd.to_datetime(price_df["date"])
+    global_latest = dates.max()
+    last_per_ticker = price_df.assign(_d=dates).groupby("ticker")["_d"].max()
+    stale = last_per_ticker[(global_latest - last_per_ticker).dt.days > max_stale_days]
+    stale_tickers = sorted(stale.index.tolist())
+    if stale_tickers:
+        preview = ", ".join(
+            f"{t}({(global_latest - last_per_ticker[t]).days}d)" for t in stale_tickers[:8]
+        )
+        print(
+            f"[validation] WARNING: {len(stale_tickers)} ticker(s) lag the latest "
+            f"bar {global_latest.date()} by > {max_stale_days}d and may drop out of "
+            f"today's scoring: {preview}{' …' if len(stale_tickers) > 8 else ''}"
+        )
+    return stale_tickers
+
+
+def run_index_gates(index_df: pd.DataFrame) -> None:
+    """OHLCV sanity + date-gap checks on the index/VIX feed (backlog §2b.6).
+
+    Previously only the stock prices were validated; the index feed (which drives
+    every shared regime/VIX feature) was fetched and used unvalidated. Runs the
+    same OHLCV/date-gap gates per index ticker. Raises ``DataQualityError`` on
+    genuine corruption (non-positive prices); gaps are warnings only.
+    """
+    if index_df is None or index_df.empty:
+        print("[validation] WARNING: no index data to validate")
+        return
+    for tk, grp in index_df.groupby("ticker"):
+        check_ohlcv(grp)
+        check_date_gaps(grp)
+    print(f"[validation] index gates passed — {index_df['ticker'].nunique()} index series")
+
+
+def summarize_data_quality(
+    price_df: pd.DataFrame,
+    index_df: pd.DataFrame,
+    stale_tickers: list[str] | None = None,
+    index_tickers: tuple[str, ...] = ("^NSEI", "^INDIAVIX"),
+) -> dict:
+    """Compact per-run data-quality snapshot (backlog §2b.9).
+
+    Persisted into run metadata so feed degradation (index lag, spike creep,
+    tickers dropping out) shows up as a trend rather than a one-off log line.
+    """
+    dates = pd.to_datetime(price_df["date"])
+    stock_latest = dates.max()
+    index_lag = {}
+    if index_df is not None and not index_df.empty:
+        for tk in index_tickers:
+            sub = index_df[index_df["ticker"] == tk]
+            index_lag[tk] = (
+                int((stock_latest - pd.to_datetime(sub["date"]).max()).days)
+                if not sub.empty else None
+            )
+    n_spikes = int(price_df["spike_flag"].sum()) if "spike_flag" in price_df.columns else None
+    summary = {
+        "n_rows": int(len(price_df)),
+        "n_tickers": int(price_df["ticker"].nunique()),
+        "date_min": str(dates.min().date()),
+        "date_max": str(stock_latest.date()),
+        "index_lag_days": index_lag,
+        "n_spike_rows": n_spikes,
+        "n_stale_latest_tickers": len(stale_tickers or []),
+        "stale_latest_tickers": list(stale_tickers or [])[:20],
+    }
+    print(
+        f"[validation] data-quality: {summary['n_rows']:,} rows | "
+        f"{summary['n_tickers']} tickers | index_lag={index_lag} | "
+        f"spikes={n_spikes} | stale_latest={summary['n_stale_latest_tickers']}"
+    )
+    return summary
+
+
 def check_spike_filter(
     df: pd.DataFrame,
     col: str = "close",

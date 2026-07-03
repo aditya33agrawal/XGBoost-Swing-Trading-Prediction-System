@@ -29,7 +29,10 @@ DEFAULT_EXCH_TXN_RATE  = 0.0000297
 DEFAULT_SEBI_RATE      = 0.000001
 DEFAULT_STAMP_RATE     = 0.00015    # 0.015% on buy side only
 DEFAULT_GST_RATE       = 0.18       # on (brokerage + exch + SEBI)
-DEFAULT_DP_CHARGE      = 13.0       # per scrip on sell, INR, flat
+# DP charge: CDSL ₹13.50 + 18% GST ≈ ₹15.93 per scrip per sell day (Zerodha
+# schedule). FLAT, not proportional — this is the charge that dominates small
+# accounts: on a ₹4,000 position it alone is ~0.40% of the position.
+DEFAULT_DP_CHARGE      = 15.93      # per scrip on sell, INR, flat, GST incl.
 
 
 def buy_leg_cost(
@@ -121,10 +124,31 @@ def cost_fraction(
 
     Approximates cost / trade_value.  For portfolio backtesting, multiply
     by position value to get cost drag per rebalance.
+
+    Because the DP charge is FLAT, this fraction is strongly size-dependent:
+    ~0.25% at ₹1,00,000 per position but ~0.85% at ₹4,000 per position.
+    Always evaluate it at the position size actually being traded.
     """
     rt = indian_round_trip_cost(trade_value, trade_value)
     slip = 2 * slippage_bps / 1e4 * trade_value
     return (rt + slip) / (trade_value + 1e-9)
+
+
+def per_position_cost_fraction(
+    capital: float,
+    position_size_pct: float,
+    slippage_bps: float = 10.0,
+) -> float:
+    """Round-trip cost fraction for one position of a real account.
+
+    This is the honest number for a small account: cost_fraction evaluated at
+    the actual INR position size (capital × position_size_pct), so the flat
+    DP charge is amortised over the true position value, not a hypothetical
+    ₹1,00,000 trade.  Used by the backtest when cfg.capital_aware_costs is on,
+    so backtest P&L bleeds the way the live account will.
+    """
+    position_value = max(capital * position_size_pct, 1.0)
+    return cost_fraction(position_value, slippage_bps=slippage_bps)
 
 
 # Convenience constant: approximate round-trip cost as fraction of value

@@ -50,6 +50,54 @@ def _conviction_weighted_return(basket: pd.DataFrame, reverse: bool = False) -> 
     return float((basket["fwd_ret"] * weights).sum())
 
 
+def base_rt_cost_fraction(cfg) -> float:
+    """Round-trip cost fraction the backtest should charge, honouring the
+    account profile. With cfg.capital_aware_costs (default True) the fraction
+    is evaluated at the ACTUAL per-position size (initial_capital ×
+    position_size_pct) so the flat DP charge is amortised over the true
+    position value — at ₹20k / 5 positions that is ~0.9% RT, not the ~0.25%
+    a ₹1L position pays. Falls back to the legacy ₹1L constant otherwise."""
+    if getattr(cfg, "capital_aware_costs", False):
+        return _costs_mod.per_position_cost_fraction(
+            capital=getattr(cfg, "initial_capital", 100_000),
+            position_size_pct=getattr(cfg, "position_size_pct", 1.0),
+            slippage_bps=getattr(cfg, "slippage_bps", 10.0),
+        )
+    return _costs_mod.APPROX_RT_COST_FRACTION
+
+
+def _select_long_basket(day: pd.DataFrame, cfg, prev_long: set[str]) -> pd.DataFrame:
+    """Pick the long basket for one rebalance date.
+
+    Modes (small-capital plan §1):
+      top_k_positions > 0  → concentrated top-K book (what a ₹20k account can
+                             actually hold), else legacy top-quintile membership.
+      hysteresis_enabled   → held names stay while their score-rank percentile
+                             is ≥ exit_rank_pct; new names must rank above
+                             entry_rank_pct. Cuts boundary churn, and every
+                             avoided round trip saves the full small-account
+                             cost fraction (plan §Phase 4.20).
+    """
+    day = day.copy()
+    day["rank_pct"] = day["pred"].rank(pct=True)
+    top_k = int(getattr(cfg, "top_k_positions", 0) or 0)
+    basket_size = min(top_k, len(day)) if top_k > 0 else max(1, len(day) // cfg.n_quantile)
+
+    if not getattr(cfg, "hysteresis_enabled", False) or not prev_long:
+        return day.nlargest(basket_size, "pred")
+
+    exit_pct = float(getattr(cfg, "exit_rank_pct", 0.60))
+    entry_pct = float(getattr(cfg, "entry_rank_pct", 0.80))
+
+    held = day[day["ticker"].isin(prev_long) & (day["rank_pct"] >= exit_pct)]
+    held = held.nlargest(basket_size, "pred")
+    n_free = basket_size - len(held)
+    if n_free <= 0:
+        return held
+    candidates = day[~day["ticker"].isin(set(held["ticker"])) & (day["rank_pct"] >= entry_pct)]
+    return pd.concat([held, candidates.nlargest(n_free, "pred")])
+
+
 def run_backtest(
     preds: pd.DataFrame,
     cfg,
@@ -72,7 +120,7 @@ def run_backtest(
     if preds.empty or "pred" not in preds.columns or "fwd_ret" not in preds.columns:
         return {"error": "prediction frame is empty or missing required columns"}
 
-    rt_cost = rt_cost_override if rt_cost_override is not None else _costs_mod.APPROX_RT_COST_FRACTION
+    rt_cost = rt_cost_override if rt_cost_override is not None else base_rt_cost_fraction(cfg)
     period_rets: list[float] = []
     prev_long: set[str] = set()
     prev_short: set[str] = set()
@@ -98,17 +146,12 @@ def run_backtest(
                 prev_long, prev_short = set(), set()
                 continue
 
-        # Rank-based quintile assignment
+        # Long basket: top-K concentrated book or legacy top quintile, with
+        # optional turnover hysteresis (see _select_long_basket).
         day = day.copy()
-        day["q"] = pd.qcut(
-            day["pred"].rank(method="first"),
-            cfg.n_quantile,
-            labels=False,
-        )
-
         conviction_weighted = getattr(cfg, "conviction_weighted_sizing", True)
 
-        longs = day[day["q"] == cfg.n_quantile - 1]
+        longs = _select_long_basket(day, cfg, prev_long)
         long_set = set(longs["ticker"])
         if longs.empty:
             long_ret = 0.0
@@ -118,6 +161,11 @@ def run_backtest(
             long_ret = float(longs["fwd_ret"].mean())
 
         if cfg.mode == "long_short":
+            day["q"] = pd.qcut(
+                day["pred"].rank(method="first"),
+                cfg.n_quantile,
+                labels=False,
+            )
             shorts = day[day["q"] == 0]
             short_set = set(shorts["ticker"])
             if shorts.empty:
@@ -220,7 +268,7 @@ def sensitivity_analysis(
     cost_multipliers: list[float] = (0.5, 1.0, 1.5, 2.0),
 ) -> pd.DataFrame:
     """Vary cost assumptions and report Sharpe across scenarios."""
-    base_cost = _costs_mod.APPROX_RT_COST_FRACTION
+    base_cost = base_rt_cost_fraction(cfg)
     rows = []
     for mult in cost_multipliers:
         result = run_backtest(preds, cfg, rt_cost_override=base_cost * mult)

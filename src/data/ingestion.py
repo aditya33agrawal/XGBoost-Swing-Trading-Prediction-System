@@ -48,7 +48,7 @@ UNIVERSE: list[str] = [
     "COALINDIA.NS", "COCHINSHIP.NS", "COFORGE.NS", "COLPAL.NS", "CONCOR.NS",
     "COROMANDEL.NS", "CUMMINSIND.NS", "DABUR.NS", "DIVISLAB.NS", "DIXON.NS",
     "DLF.NS", "DMART.NS", "DRREDDY.NS", "EICHERMOT.NS", "ETERNAL.NS",
-    "EXIDEIND.NS", "FEDERALBNK.NS", "FORTIS.NS", "GAIL.NS", "GET&D.NS",
+    "EXIDEIND.NS", "FEDERALBNK.NS", "FORTIS.NS", "GAIL.NS", "GVT&D.NS",
     "GLENMARK.NS", "GMRAIRPORT.NS", "GODFRYPHLP.NS", "GODREJCP.NS", "GODREJPROP.NS",
     "GRASIM.NS", "GROWW.NS", "HAL.NS", "HAVELLS.NS", "HCLTECH.NS",
     "HDFCAMC.NS", "HDFCBANK.NS", "HDFCLIFE.NS", "HEROMOTOCO.NS", "HINDALCO.NS",
@@ -60,7 +60,7 @@ UNIVERSE: list[str] = [
     "KALYANKJIL.NS", "KEI.NS", "KOTAKBANK.NS", "KPITTECH.NS", "LAURUSLABS.NS",
     "LENSKART.NS", "LICHSGFIN.NS", "LODHA.NS", "LT.NS", "LTF.NS",
     "LTM.NS", "LUPIN.NS", "M&M.NS", "M&MFIN.NS", "MANKIND.NS",
-    "MARICO.NS", "MARUTI.NS", "MAXHEALTH.NS", "MAZDOCK.NS", "MCDOWELL-N.NS",
+    "MARICO.NS", "MARUTI.NS", "MAXHEALTH.NS", "MAZDOCK.NS", "UNITDSPR.NS",
     "MCX.NS", "MFSL.NS", "MOTHERSON.NS", "MOTILALOFS.NS", "MPHASIS.NS",
     "MRF.NS", "MUTHOOTFIN.NS", "NATIONALUM.NS", "NAUKRI.NS", "NESTLEIND.NS",
     "NHPC.NS", "NMDC.NS", "NTPC.NS", "NYKAA.NS", "OBEROIRLTY.NS",
@@ -191,12 +191,7 @@ def _retry_tickers_individually(
     # recently renamed/relisted and the exact symbol is unconfirmed.
     ALIASES: dict[str, list[str]] = {
         "M&M.NS": ["M&M.NS", "MM.NS"],
-        # GET&D.NS was renamed to GVT&D.NS after the Hitachi acquisition;
-        # the old symbol now 404s on yfinance, so try the live one first.
-        "GET&D.NS": ["GVT&D.NS", "GET&D.NS"],
         "LTF.NS": ["LTF.NS", "L&TFH.NS"],
-        # MCDOWELL-N.NS was renamed to UNITDSPR.NS; old symbol now 404s.
-        "MCDOWELL-N.NS": ["UNITDSPR.NS", "MCDOWELL-N.NS"],
         # LTIMindtree renamed its trading symbol LTIM -> LTM on 2026-02-27
         # (rebranded to "LTM Limited"); LTIM.NS no longer resolves.
         "LTM.NS": ["LTM.NS", "LTIM.NS"],

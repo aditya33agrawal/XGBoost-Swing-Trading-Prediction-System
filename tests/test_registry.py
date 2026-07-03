@@ -94,5 +94,25 @@ def test_calibration_and_drift_block():
         drift_alarm=True)["promote"]
 
 
+def test_quality_floor_blocks_first_model():
+    # Insignificant first model (the 2026-06-29 case) must NOT auto-deploy.
+    assert not evaluate_promotion(
+        challenger={"ic": 0.0005, "ic_t_stat": 0.39, "deflated_sharpe": 0.629},
+        champion=None)["promote"]
+    # A significant first model still ships.
+    assert evaluate_promotion(
+        challenger={"ic": 0.03, "ic_t_stat": 2.5, "deflated_sharpe": 0.97},
+        champion=None)["promote"]
+    # Floors are only enforced when measured — absent metrics don't block.
+    assert evaluate_promotion(challenger={"ic": 0.01}, champion=None)["promote"]
+
+
+def test_quality_floor_blocks_against_champion():
+    # Beats champion Sharpe but fails the IC-IR significance floor → blocked.
+    assert not evaluate_promotion(
+        challenger={"sharpe_net": 2.0, "ic_t_stat": 1.0},
+        champion={"sharpe_net": 1.0})["promote"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

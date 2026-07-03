@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 SHARPE_MARGIN = 0.10     # challenger must beat champion Sharpe by this much
 IC_MARGIN = 0.005        # …or improve IC by this much (fallback when Sharpe is noisy)
 CALIB_TOL = 0.10         # max acceptable calibration error (ECE)
+# Absolute-quality floors (doc §2.3): a model must clear these to auto-deploy
+# even as the FIRST model — the 2026-06-29 run shipped with OOF IC 0.0005 purely
+# because there was no incumbent. These block a statistically-insignificant model
+# from production regardless of the champion comparison. Only enforced when the
+# metric was actually measured (NaN/absent ⇒ not blocked, e.g. fast-signals runs).
+MIN_IC_T_STAT = 2.0      # IC-IR t-stat: signal must be distinguishable from zero
+MIN_DSR = 0.95           # Deflated Sharpe P(true Sharpe>0): survives multiple-testing
 
 
 def _is_num(x) -> bool:
@@ -30,11 +37,14 @@ def evaluate_promotion(
     sharpe_margin: float = SHARPE_MARGIN,
     ic_margin: float = IC_MARGIN,
     calib_tol: float = CALIB_TOL,
+    min_ic_t_stat: float = MIN_IC_T_STAT,
+    min_dsr: float = MIN_DSR,
 ) -> dict:
     """Decide whether `challenger` should replace `champion`.
 
     `challenger` / `champion` are metric dicts with any of:
-        sharpe_net (or Sharpe), ic (or oof_ic), calib_err (or ECE).
+        sharpe_net (or Sharpe), ic (or oof_ic), calib_err (or ECE),
+        ic_t_stat (or oof_ic_t_stat), deflated_sharpe (or dsr).
 
     Returns {promote: bool, reasons: [...], checks: {...}}.
     """
@@ -46,17 +56,41 @@ def evaluate_promotion(
 
     reasons: list[str] = []
 
-    # No champion yet ⇒ first model always ships (still blocked by drift alarm).
+    # Absolute-quality floors (doc §2.3) — applied to EVERY promotion, including
+    # the first model. A statistically-insignificant model never auto-deploys.
+    ch_t_stat = g(challenger, "ic_t_stat", "oof_ic_t_stat", "t_stat")
+    ch_dsr = g(challenger, "deflated_sharpe", "dsr")
+    quality_ok = True
+    quality_checks: dict = {}
+    if _is_num(ch_t_stat):
+        ok = ch_t_stat >= min_ic_t_stat
+        quality_checks["ic_t_stat"] = {"value": ch_t_stat, "floor": min_ic_t_stat, "pass": ok}
+        if not ok:
+            quality_ok = False
+            reasons.append(f"IC-IR t-stat {ch_t_stat:.2f} < floor {min_ic_t_stat}")
+    if _is_num(ch_dsr):
+        ok = ch_dsr >= min_dsr
+        quality_checks["deflated_sharpe"] = {"value": ch_dsr, "floor": min_dsr, "pass": ok}
+        if not ok:
+            quality_ok = False
+            reasons.append(f"Deflated Sharpe {ch_dsr:.3f} < floor {min_dsr}")
+
+    # No champion yet ⇒ first model ships only if it clears the quality floors
+    # (and no drift alarm). Pre-floor, the first model deployed unconditionally.
     if champion is None:
         if drift_alarm:
-            return {"promote": False, "reasons": ["drift alarm on first model"], "checks": {}}
-        return {"promote": True, "reasons": ["no champion — first model promoted"], "checks": {}}
+            reasons.insert(0, "drift alarm on first model")
+            return {"promote": False, "reasons": reasons, "checks": quality_checks}
+        if not quality_ok:
+            return {"promote": False, "reasons": reasons, "checks": quality_checks}
+        return {"promote": True, "reasons": ["no champion — first model clears quality floors"],
+                "checks": quality_checks}
 
     ch_sharpe, cp_sharpe = g(challenger, "sharpe_net", "Sharpe"), g(champion, "sharpe_net", "Sharpe")
     ch_ic, cp_ic = g(challenger, "ic", "oof_ic"), g(champion, "ic", "oof_ic")
     ch_calib = g(challenger, "calib_err", "ECE", "ece")
 
-    checks: dict = {}
+    checks: dict = dict(quality_checks)
 
     # 1. performance — prefer Sharpe; fall back to IC when Sharpe is unavailable
     perf_ok = False
@@ -89,9 +123,9 @@ def evaluate_promotion(
     if drift_alarm:
         reasons.append("drift alarm active — holding champion")
 
-    promote = perf_ok and calib_ok and drift_ok
+    promote = perf_ok and calib_ok and drift_ok and quality_ok
     if promote:
-        reasons = ["beats champion on performance, calibration + drift clean"]
+        reasons = ["beats champion on performance, clears quality floors, calibration + drift clean"]
     logger.info("Promotion decision: %s — %s", "PROMOTE" if promote else "KEEP CHAMPION",
                 "; ".join(reasons))
     return {"promote": promote, "reasons": reasons, "checks": checks}

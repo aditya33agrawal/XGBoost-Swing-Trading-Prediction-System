@@ -55,11 +55,16 @@ logger = logging.getLogger(__name__)
 # CLI
 # ---------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Weekly Nifty 50 model retrain + deploy")
+    p = argparse.ArgumentParser(description="Weekly Nifty 200 model retrain + deploy")
     p.add_argument("--trials",       type=int,   default=50)
     p.add_argument("--horizon",      type=int,   default=5)
-    p.add_argument("--capital",      type=float, default=1_000_000)
-    p.add_argument("--max-positions",type=int,   default=10)
+    # Small-capital profile (docs/small-capital-strategy-plan.md): ₹20k, 5
+    # concentrated positions. The backtest, cost model, trade planner and
+    # paper portfolio all key off these two numbers.
+    p.add_argument("--capital",      type=float, default=20_000)
+    p.add_argument("--max-positions",type=int,   default=5)
+    p.add_argument("--no-auto-trade", action="store_true",
+                   help="Do not auto-open paper positions from the trade plan")
     p.add_argument("--drive-dir",    default="",
                    help="Google Drive output dir (Colab only)")
     p.add_argument("--skip-deploy",  action="store_true",
@@ -132,6 +137,15 @@ def main() -> None:
 
     # ---- Step 2: Full retrain -------------------------------------------
     logger.info("\n[Step 2] Full retrain (trials=%d) …", args.trials)
+    # Small-capital strategy profile: concentrated top-K book (the backtest
+    # trades only what the account can hold), turnover hysteresis, and costs
+    # evaluated at the true per-position size. Paper entries stay OFF during
+    # the full-retrain pass — the deployed-model signal run (Step 4) trades.
+    _small_cap = dict(
+        top_k_positions     = args.max_positions,
+        hysteresis_enabled  = True,
+        capital_aware_costs = True,
+    )
     train_cfg = Config(
         horizon          = args.horizon,
         xgb_n_trials     = args.trials,
@@ -139,6 +153,7 @@ def main() -> None:
         save_outputs     = True,
         save_to_supabase = True,
         paper_trade      = not args.no_paper_trade,
+        auto_open_signals= False,
         initial_capital  = args.capital,
         max_positions    = args.max_positions,
         supabase_url     = os.getenv("SUPABASE_URL", ""),
@@ -147,6 +162,7 @@ def main() -> None:
         resolve_outcomes_on_start = False,  # already done above
         rebalance_every  = args.horizon,
         embargo          = args.horizon,
+        **_small_cap,
     )
     new_stats, new_signals = run(train_cfg)
 
@@ -178,7 +194,11 @@ def main() -> None:
     else:
         decision = evaluate_promotion(
             challenger={"sharpe_net": new_sharpe, "ic": new_oof_ic,
-                        "calib_err": new_stats.get("calib_err")},
+                        "calib_err": new_stats.get("calib_err"),
+                        # Absolute-quality floors (doc §2.3): block an
+                        # insignificant model even as the first deploy.
+                        "ic_t_stat": new_stats.get("oof_ic_t_stat"),
+                        "deflated_sharpe": new_stats.get("deflated_sharpe")},
             champion=None if math.isnan(current_ic) else {"ic": current_ic},
             drift_alarm=drift_alarm,
         )
@@ -213,6 +233,9 @@ def main() -> None:
         save_outputs     = True,
         save_to_supabase = True,
         paper_trade      = not args.no_paper_trade,
+        # The signal pass is the one that trades: auto-open the planner's BUY
+        # rows in the paper portfolio unless the user opted out.
+        auto_open_signals= not (args.no_auto_trade or args.no_paper_trade),
         initial_capital  = args.capital,
         max_positions    = args.max_positions,
         supabase_url     = os.getenv("SUPABASE_URL", ""),
@@ -221,8 +244,40 @@ def main() -> None:
         resolve_outcomes_on_start = False,
         rebalance_every  = args.horizon,
         embargo          = args.horizon,
+        **_small_cap,
     )
     _, week_signals = run(sig_cfg)
+
+    # Data-alarm: an EMPTY signal frame is never a normal market outcome. The
+    # regime overlay produces all-NEUTRAL signals (a populated frame), so an
+    # empty frame means the latest cross-section was wiped by a data bug —
+    # almost always a stale/misaligned index/VIX bar (see the 2026-06-29
+    # zero-signal incident). Flag it loudly rather than reporting "0 signals"
+    # as if the model simply chose to stay flat.
+    if week_signals.empty:
+        logger.error(
+            "  ⚠️  DATA ALARM: 0 signals scored for the latest date. This is a "
+            "data-alignment bug (likely a stale index/VIX bar wiping the "
+            "cross-section), NOT a flat-market decision. Check the "
+            "'predict_latest: ... all-NaN on latest date' warning above."
+        )
+
+    # ---- Step 5: Weekly review — predicted vs actual scorecard -----------
+    logger.info("\n[Step 5] Weekly review report …")
+    try:
+        from src.tracking.review import build_weekly_review, write_weekly_review
+        review = build_weekly_review(
+            sb,
+            fallback_dir=base_cfg.output_dir,
+            portfolio_path=sig_cfg.portfolio_path,
+            backtest_oof_ic=None if math.isnan(new_oof_ic) else new_oof_ic,
+        )
+        review_path = write_weekly_review(review, reports_dir=train_cfg.reports_dir)
+        logger.info("  %s", review["verdict"])
+        logger.info("  Review → %s", review_path)
+        _sync_to_drive("reports", args.drive_dir, "reports")
+    except Exception as exc:
+        logger.warning("  Weekly review failed (non-fatal): %s", exc)
 
     # ---- Summary --------------------------------------------------------
     logger.info("\n" + "=" * 64)

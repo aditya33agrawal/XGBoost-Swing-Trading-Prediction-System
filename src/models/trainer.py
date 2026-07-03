@@ -120,6 +120,9 @@ _BASE_PARAMS_RANKER = {
     "objective": "rank:ndcg",
     "eval_metric": "ndcg",
     "lambdarank_pair_method": "topk",
+    # Reverted 16 → 8 (weekly-retrain-fixes-2026-06-29 §2.2): the 8→16 bump
+    # increased pairwise-gradient variance and coincided with the CV→OOF
+    # generalization collapse. Back to the prior stable value pending an A/B.
     "lambdarank_num_pair_per_sample": 8,
     "n_estimators": 400,
     "learning_rate": 0.02,
@@ -359,6 +362,58 @@ def train_xgb_ranker_no_es(
     return model
 
 
+def train_xgb_bag_no_es(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    params: dict,
+    sample_weight: np.ndarray | None = None,
+    task: str = "classification",
+    n_seeds: int = 3,
+    base_seed: int = 42,
+) -> list:
+    """Multi-seed bag of clf/reg models with NO early stopping — the final-model
+    analogue of ``train_xgb_bag`` for the live ``predict_latest`` path (plan
+    Phase 3.16 / fixes doc Tier 2.8). The OOF walk-forward already bags; the live
+    fit was a single noisy draw, the main source of run-to-run signal swings.
+    Average with ``predict_bag``."""
+    xgb = _get_xgb()
+    p = {k: v for k, v in params.items() if k != "early_stopping_rounds"}
+    p = _with_device(p)
+    models = []
+    for i in range(max(1, n_seeds)):
+        sp = dict(p)
+        sp["random_state"] = base_seed + i
+        if task == "classification":
+            y_b = (y_train == 1).astype(int)
+            m = xgb.XGBClassifier(**sp)
+            m.fit(X_train, y_b, sample_weight=sample_weight, verbose=False)
+        else:
+            m = xgb.XGBRegressor(**sp)
+            m.fit(X_train, y_train, sample_weight=sample_weight, verbose=False)
+        models.append(m)
+    return models
+
+
+def train_xgb_bag_ranker_no_es(
+    X_train: pd.DataFrame,
+    y_train,
+    qid_train,
+    params: dict,
+    sample_weight: np.ndarray | None = None,
+    n_seeds: int = 3,
+    base_seed: int = 42,
+) -> list:
+    """Multi-seed bag of no-early-stopping rankers for the live path (Tier 2.8)."""
+    models = []
+    for i in range(max(1, n_seeds)):
+        sp = dict(params)
+        sp["random_state"] = base_seed + i
+        models.append(
+            train_xgb_ranker_no_es(X_train, y_train, qid_train, sp, sample_weight=sample_weight)
+        )
+    return models
+
+
 # ---------------------------------------------------------------------------
 # Quantile regression heads (docs/dynamic-horizon-rr-plan.md Phase 2) —
 # one head per (horizon, tau) cell, trained with XGBoost's native pinball-loss
@@ -503,6 +558,7 @@ def _optuna_objective(
     eval_target: pd.Series | None = None,
     threads_per_trial: int = 0,
     qid_all: np.ndarray | None = None,
+    dates_all: np.ndarray | None = None,
 ):
     from scipy import stats as sp_stats
     xgb = _get_xgb()
@@ -511,6 +567,9 @@ def _optuna_objective(
     params = {
         "objective": objective,
         "eval_metric": eval_metric,
+        # Ceiling reverted 3000 → 1500 for ranking (fixes doc §2.2): 3000 trees
+        # at lr≈0.0125 is far more capacity than IC≈0.02 supports and widened the
+        # CV→OOF gap. Uniform 1500 ceiling with CV early stopping for all tasks.
         "n_estimators": trial.suggest_int("n_estimators", 200, 1500),
         "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
         "max_depth": trial.suggest_int("max_depth", 3, 6),
@@ -533,7 +592,11 @@ def _optuna_objective(
     if threads_per_trial > 0:
         params["n_jobs"] = threads_per_trial
 
-    fold_scores = []
+    # Collect per-day cross-sectional ICs pooled across every CV fold's
+    # validation slice. The objective is their information ratio (mean/std),
+    # NOT a single pooled Spearman — see the return statement.
+    daily_ics: list[float] = []
+    pooled_fallback: list[float] = []
     for train_idx, val_idx in splits:
         X_tr, y_tr = X.iloc[train_idx], y.iloc[train_idx]
         X_vl, y_vl = X.iloc[val_idx], y.iloc[val_idx]
@@ -561,16 +624,39 @@ def _optuna_objective(
                       eval_set=[(X_vl, y_vl)], verbose=False)
             preds = model.predict(X_vl)
 
-        # Objective: Information Coefficient (Spearman) on realised forward return.
-        # The strategy P&L and the reported OOF IC both rank against `fwd_ret`, so
-        # we tune against `fwd_ret` (eval_target) rather than the discrete
-        # triple-barrier label {-1,0,1}.  Falls back to y when no eval_target given.
+        # Rank predictions against realised forward return (eval_target) — the
+        # signal the backtest trades — rather than the discrete triple-barrier
+        # label {-1,0,1}. Falls back to y when no eval_target given.
         target_vl = eval_target.iloc[val_idx].values if eval_target is not None else y_vl.values
-        if len(target_vl) > 1:
-            ic, _ = sp_stats.spearmanr(preds, target_vl)
-            fold_scores.append(ic if not np.isnan(ic) else 0.0)
+        if len(target_vl) <= 1:
+            continue
 
-    return float(np.mean(fold_scores)) if fold_scores else 0.0
+        if dates_all is not None:
+            # Per-day cross-sectional IC: Spearman within each date, the honest
+            # measure of stock-picking skill. Pool these daily ICs so the search
+            # optimises a significance-aware (IC-IR) target, not pooled IC that a
+            # single trending fold can inflate (fixes doc §2.2).
+            d_vl = dates_all[val_idx]
+            fold_df = pd.DataFrame({"_d": d_vl, "_p": preds, "_t": target_vl})
+            for _, g in fold_df.groupby("_d", sort=False):
+                if len(g) > 1:
+                    ic, _ = sp_stats.spearmanr(g["_p"].to_numpy(), g["_t"].to_numpy())
+                    if not np.isnan(ic):
+                        daily_ics.append(float(ic))
+        else:
+            ic, _ = sp_stats.spearmanr(preds, target_vl)
+            pooled_fallback.append(ic if not np.isnan(ic) else 0.0)
+
+    # Objective = mean daily IC-IR (mean/std of the pooled per-day ICs). This is
+    # the stable, significance-aware target the promotion gate also uses; pooled
+    # IC over-rewarded configs that fit a trending CV fold but didn't generalise.
+    if len(daily_ics) >= 5:
+        arr = np.asarray(daily_ics, dtype=float)
+        std = arr.std(ddof=1)
+        return float(arr.mean() / std) if std > 1e-9 else float(arr.mean())
+    if daily_ics:
+        return float(np.mean(daily_ics))
+    return float(np.mean(pooled_fallback)) if pooled_fallback else 0.0
 
 
 def tune_hyperparameters(
@@ -584,15 +670,21 @@ def tune_hyperparameters(
     eval_target_col: str = "fwd_ret",
     max_workers: int = 8,
     qid_col: str = "date",
+    out_meta: dict | None = None,
 ) -> dict:
     """Run Optuna search; return best params dict.
 
-    The trial objective ranks predictions against ``eval_target_col`` (the
-    realised forward return) when that column is present, so HPO optimises the
-    same signal the backtest trades — not the discrete classification label.
+    The trial objective is the **mean daily IC-IR** — the information ratio of
+    the per-date cross-sectional ICs of predictions vs ``eval_target_col`` (the
+    realised forward return). This significance-aware target generalises far
+    better than pooled IC, which a single trending CV fold can inflate (doc
+    §2.2). The OOF report and promotion gate use the same IC-IR measure.
 
     For task="ranking" the query group is ``qid_col`` (date); it is passed to
     each fold's XGBRanker so the LambdaMART pairs are formed within a date.
+
+    If ``out_meta`` is passed, ``out_meta["cv_best_score"]`` is set to the best
+    CV IC-IR so the caller can report the CV→OOF generalization gap.
     """
     try:
         import optuna
@@ -605,14 +697,16 @@ def tune_hyperparameters(
 
     X = df_train[feature_cols]
     y = df_train[target_col]
-    # Positional query-group codes for the ranking objective (None otherwise).
-    qid_all = df_train[qid_col].to_numpy() if task == "ranking" else None
+    # Positional dates for both the per-day IC objective (all tasks) and the
+    # ranking query-group (ranking only); same column, so compute once.
+    dates_all = df_train[qid_col].to_numpy()
+    qid_all = dates_all if task == "ranking" else None
     if eval_target_col in df_train.columns:
         eval_target = df_train[eval_target_col].reset_index(drop=True)
-        logger.info("Optuna objective: ranking IC vs '%s'", eval_target_col)
+        logger.info("Optuna objective: mean daily IC-IR vs '%s'", eval_target_col)
     else:
         eval_target = None
-        logger.info("Optuna objective: ranking IC vs target '%s' (no %s column)",
+        logger.info("Optuna objective: mean daily IC-IR vs target '%s' (no %s column)",
                     target_col, eval_target_col)
 
     study = optuna.create_study(
@@ -645,16 +739,19 @@ def tune_hyperparameters(
     )
 
     def _log_trial(study_, trial):
-        # Log every trial's IC and the running best so progress is visible in Colab.
+        # Log every trial's IC-IR and the running best so progress is visible in Colab.
         logger.info(
-            "  trial %3d/%d | IC=%+.4f | best=%+.4f",
+            "  trial %3d/%d | IC-IR=%+.4f | best=%+.4f",
             trial.number + 1, n_trials,
             trial.value if trial.value is not None else float("nan"),
             study_.best_value,
         )
 
     study.optimize(
-        lambda t: _optuna_objective(t, X, y, splits, task, sample_weights, eval_target, threads_per_trial, qid_all),
+        lambda t: _optuna_objective(
+            t, X, y, splits, task, sample_weights, eval_target,
+            threads_per_trial, qid_all, dates_all,
+        ),
         n_trials=n_trials,
         show_progress_bar=False,
         n_jobs=n_parallel,
@@ -672,7 +769,10 @@ def tune_hyperparameters(
     best["verbosity"] = 0
     best["early_stopping_rounds"] = 50
 
-    logger.info("Tuning done — best IC = %.4f", study.best_value)
+    if out_meta is not None:
+        out_meta["cv_best_score"] = float(study.best_value)
+
+    logger.info("Tuning done — best CV IC-IR = %.4f", study.best_value)
     logger.info("Best params: %s", best)
     return best
 

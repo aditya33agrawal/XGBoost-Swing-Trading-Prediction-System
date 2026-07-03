@@ -105,6 +105,25 @@ def _features_for_ticker(grp: pd.DataFrame) -> pd.DataFrame:
         hi = c.rolling(n).max()
         f[f"price_pos_{n}d"] = (c - lo) / (hi - lo + 1e-9)
 
+    # --- classic cross-sectional equity factors --------------------------
+    # These are the most-replicated OHLCV-derivable predictors of the
+    # cross-section of returns and were absent (the existing momentum tops
+    # out at 63d). They are the biggest new-signal source that needs no
+    # external data (India/fundamental feeds are the other, out of scope).
+    #
+    # 12-1 and 6-1 momentum (Jegadeesh-Titman / Fama-French UMD): cumulative
+    # return over the past year/half-year, *skipping the most recent month* to
+    # avoid the well-documented short-term reversal that contaminates raw
+    # trailing momentum. Uses only shifted (past) prices — no look-ahead.
+    f["mom_12_1"] = np.log(c.shift(21) / c.shift(252))
+    f["mom_6_1"] = np.log(c.shift(21) / c.shift(126))
+
+    # 52-week-high proximity (George & Hwang 2004): how close the price is to
+    # its trailing 1-year high. A distinct anchor from the short-window
+    # price_pos features; nearness-to-high predicts continuation.
+    hi_252 = c.rolling(252).max()
+    f["pos_52w"] = c / (hi_252 + 1e-9)
+
     # --- trend/oscillators -----------------------------------------------
     if _HAS_TA:
         f["rsi_14"] = ta.rsi(c, length=14)
@@ -147,6 +166,30 @@ def _features_for_ticker(grp: pd.DataFrame) -> pd.DataFrame:
     f["park_vol_21"] = (
         (np.log(h / l) ** 2 / (4 * np.log(2))).rolling(21).mean() ** 0.5
     )
+
+    # Amihud (2002) illiquidity: mean |return|/dollar_volume — proxy for price
+    # impact per unit traded. Illiquid stocks earn a premium cross-sectionally.
+    # Scale by 1e6 before log1p so raw values (≈1e-10) land in a useful range.
+    daily_dollar_vol = c * v
+    f["amihud_21d"] = np.log1p(
+        (log_ret.abs() / (daily_dollar_vol + 1e-9)).rolling(21).mean() * 1e6
+    )
+
+    # Risk-adjusted momentum: the 63-day cumulative return per unit of its own
+    # realised volatility. Raw momentum loads heavily on high-vol names; scaling
+    # by rvol gives a cleaner, more stationary momentum signal (a Sharpe-like
+    # trend measure). cum_ret_63d / rvol_63d are both already computed above.
+    f["sharpe_mom_63d"] = f["cum_ret_63d"] / (f["rvol_63d"] + 1e-9)
+
+    # Return skewness (63d): negatively-skewed names command a premium
+    # (crash-risk aversion); a genuinely different signal from level/vol.
+    f["ret_skew_63d"] = log_ret.rolling(63).skew()
+
+    # MAX effect (Bali-Cakici-Whitelaw 2011): the largest single-day return over
+    # the past month proxies lottery-like demand and predicts *lower* future
+    # returns cross-sectionally — a documented negative predictor the trees can
+    # exploit once it is cross-sectionally ranked downstream.
+    f["max_ret_21d"] = log_ret.rolling(21).max()
 
     # --- volume/microstructure ------------------------------------------
     v_mean = v.rolling(20).mean()
@@ -195,12 +238,26 @@ def _features_for_ticker(grp: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Cross-sectional z-score
 # ---------------------------------------------------------------------------
-def _cs_zscore(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
-    """Z-score within each date across all tickers — eliminates level bias."""
+# Winsorization cap for cross-sectional z-scores. On early/thin dates a feature
+# can be near-constant across names, so the (std + 1e-9) denominator explodes a
+# tiny numerator into a huge z; a few |z|>>5 values then dominate every tree
+# split. Clipping at ±5σ removes those pathologies (and genuine fat-tail
+# outliers) without distorting the bulk of the distribution — a standard
+# robustifier that reduces overfitting to single-name/day extremes.
+_CS_ZSCORE_CLIP = 5.0
+
+
+def _cs_zscore(df: pd.DataFrame, cols: list[str], clip: float = _CS_ZSCORE_CLIP) -> pd.DataFrame:
+    """Z-score within each date across all tickers — eliminates level bias.
+
+    Winsorized at ±``clip`` σ (see `_CS_ZSCORE_CLIP`) so a near-constant feature
+    on a thin date can't produce runaway z-scores that dominate the model.
+    """
     def _zscore(block):
         mu = block.mean()
         sigma = block.std()
-        return (block - mu) / (sigma + 1e-9)
+        z = (block - mu) / (sigma + 1e-9)
+        return z.clip(lower=-clip, upper=clip)
 
     df[cols] = df.groupby("date")[cols].transform(_zscore)
     return df
@@ -232,6 +289,9 @@ def _add_regime_features(df: pd.DataFrame, index_df: pd.DataFrame) -> pd.DataFra
         nifty[f"nifty_dist_sma{n}"] = (
             nifty["nifty_close"] / nifty["nifty_close"].rolling(n).mean() - 1.0
         )
+    nifty["nifty_ret_1d"] = np.log(
+        nifty["nifty_close"] / nifty["nifty_close"].shift(1)
+    )
     nifty["nifty_ret_5d"] = np.log(
         nifty["nifty_close"] / nifty["nifty_close"].shift(5)
     )
@@ -245,7 +305,18 @@ def _add_regime_features(df: pd.DataFrame, index_df: pd.DataFrame) -> pd.DataFra
     )
 
     idx = nifty.merge(vix, on="date", how="outer").sort_values("date")
-    df = df.merge(idx.drop(columns=["nifty_close"]), on="date", how="left")
+    idx_feat = idx.drop(columns=["nifty_close"])
+    idx_cols = [c for c in idx_feat.columns if c != "date"]
+    df = df.merge(idx_feat, on="date", how="left")
+
+    # Forward-fill the shared index/VIX columns per ticker. yfinance frequently
+    # lags ^INDIAVIX (and occasionally ^NSEI) by a trading day, so the most-recent
+    # stock bar can have no matching index row. Without this, those columns are
+    # NaN on the latest date for EVERY ticker, and predict_latest's
+    # dropna(subset=feature_cols) drops the entire cross-section → zero signals.
+    # ffill only propagates the last-known regime value (no look-ahead).
+    df = df.sort_values(["ticker", "date"])
+    df[idx_cols] = df.groupby("ticker")[idx_cols].ffill()
     return df
 
 
@@ -253,14 +324,18 @@ def _add_regime_features(df: pd.DataFrame, index_df: pd.DataFrame) -> pd.DataFra
 # Relative-strength features (stock vs index)
 # ---------------------------------------------------------------------------
 def _add_relative_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Beta and residual return vs Nifty.  Requires nifty_ret_5d already in df."""
+    """Beta and idiosyncratic-alpha features vs Nifty at multiple horizons.
+
+    Alpha = stock_ret - beta * index_ret removes the market component from
+    momentum, exposing the stock-specific signal.  Requires nifty_ret_5d.
+    """
     if "nifty_ret_5d" not in df.columns:
         return df
 
     df = df.sort_values(["ticker", "date"]).copy()
     stock_ret = df.groupby("ticker")["ret_5d"]
 
-    # Rolling beta (63 days) via cov/var
+    # Rolling beta (63 days) via cov/var of 5d log-returns
     def _beta(grp):
         nifty = df.loc[grp.index, "nifty_ret_5d"]
         cov = grp.rolling(63).cov(nifty)
@@ -268,7 +343,87 @@ def _add_relative_features(df: pd.DataFrame) -> pd.DataFrame:
         return cov / (var + 1e-9)
 
     df["beta_63d"] = stock_ret.transform(lambda g: _beta(g))
+
+    # Idiosyncratic momentum: residual after stripping market beta
     df["alpha_5d"] = df["ret_5d"] - df["beta_63d"] * df["nifty_ret_5d"]
+    if "nifty_ret_1d" in df.columns and "ret_1d" in df.columns:
+        df["alpha_1d"] = df["ret_1d"] - df["beta_63d"] * df["nifty_ret_1d"]
+        # Idiosyncratic volatility (Ang-Hodrick-Xing-Zhang 2006): the vol of the
+        # market-residual daily return. The low-idio-vol anomaly is one of the
+        # most robust cross-sectional effects; it needs the market residual, so
+        # it lives here (not the per-ticker builder). Computed per ticker over a
+        # 63-day trailing window — uses only past residuals, no look-ahead.
+        df["idio_vol_63d"] = (
+            df.groupby("ticker")["alpha_1d"]
+            .transform(lambda s: s.rolling(63).std())
+        )
+    if "nifty_ret_21d" in df.columns and "ret_21d" in df.columns:
+        df["alpha_21d"] = df["ret_21d"] - df["beta_63d"] * df["nifty_ret_21d"]
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Market breadth (plan §Phase 2.13) — computed from the panel itself, no
+# external data. Same value for every ticker on a date (market context), so
+# NOT cross-sectionally z-scored (mirrors the nifty_*/vix* treatment).
+# Uses only same-date cross-sections of already-lagged per-ticker features —
+# available at time t, no look-ahead.
+# ---------------------------------------------------------------------------
+def _add_breadth_features(df: pd.DataFrame) -> pd.DataFrame:
+    g = df.groupby("date")
+    breadth = pd.DataFrame({
+        # % of universe above its own 50/200-SMA — the classic breadth gauges.
+        # Breadth divergence (index up, breadth down) is a pre-drawdown tell
+        # the single nifty_dist_sma200 distance cannot see.
+        "breadth_sma50":  g["dist_sma50"].apply(lambda s: (s > 0).mean()),
+        "breadth_sma200": g["dist_sma200"].apply(lambda s: (s > 0).mean()),
+        # % with positive 5d return — short-horizon participation
+        "breadth_pos_5d": g["ret_5d"].apply(lambda s: (s > 0).mean()),
+        # % near their 21d high — thrust/exhaustion gauge
+        "breadth_new_high_21d": g["price_pos_21d"].apply(lambda s: (s > 0.95).mean()),
+    }).sort_index()
+    # Breadth *momentum*: 5-session change — is participation building or rolling over?
+    breadth["breadth_sma50_chg_5d"] = breadth["breadth_sma50"].diff(5)
+    breadth = breadth.reset_index()
+    return df.merge(breadth, on="date", how="left")
+
+
+# ---------------------------------------------------------------------------
+# Sector relative strength (plan §Phase 2.12) — needs only the static
+# config/sector_map.json (ticker → sector), no external feed. Isolates
+# stock-specific alpha from sector-wide moves, which the Nifty-only
+# beta_63d/alpha_5d features cannot separate.
+# ---------------------------------------------------------------------------
+def _load_sector_map() -> dict[str, str]:
+    import json
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "config" / "sector_map.json"
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _add_sector_features(df: pd.DataFrame, sector_map: dict[str, str] | None = None) -> pd.DataFrame:
+    sector_map = sector_map if sector_map is not None else _load_sector_map()
+    if not sector_map:
+        return df
+    df = df.copy()
+    df["sector"] = df["ticker"].map(sector_map).fillna("UNKNOWN")
+
+    for n in (5, 21):
+        col = f"cum_ret_{n}d"
+        if col not in df.columns:
+            continue
+        sector_mean = df.groupby(["date", "sector"])[col].transform("mean")
+        # Sector momentum (same for every member on a date). Once cross-
+        # sectionally z-scored downstream it becomes a per-date sector-rotation
+        # rank — which sector is leading right now.
+        df[f"sector_ret_{n}d"] = sector_mean
+        # Stock return net of its sector — pure within-sector stock picking.
+        df[f"rel_sector_mom_{n}d"] = df[col] - sector_mean
     return df
 
 
@@ -305,22 +460,31 @@ def build_features(
         df = _add_regime_features(df, index_df)
         df = _add_relative_features(df)
 
+    # Market breadth (plan §2.13) + sector relative strength (plan §2.12) —
+    # both derived from the panel itself (plus the static sector map), so they
+    # are available in every run with no external data dependency.
+    df = _add_breadth_features(df)
+    df = _add_sector_features(df)
+
     # Identify feature columns (everything that isn't OHLCV/meta)
-    meta = {"date", "ticker", "open", "high", "low", "close", "volume", "spike_flag"}
+    meta = {"date", "ticker", "open", "high", "low", "close", "volume", "spike_flag", "sector"}
     feature_cols = [c for c in df.columns if c not in meta]
 
     # Cross-sectional z-score (applied after joining index features)
-    # Use only non-calendar features for z-scoring
+    # Use only non-calendar features for z-scoring. breadth_* are market-level
+    # (identical for all tickers on a date) — z-scoring them would zero them out.
     cs_cols = [
         c for c in feature_cols
         if c not in ("day_of_week", "day_of_month", "month", "is_expiry_week")
         and not c.startswith("vix")
         and not c.startswith("nifty")
+        and not c.startswith("breadth_")
     ]
     df = _cs_zscore(df, cs_cols)
 
     # Cross-sectional rank columns for key features
-    rank_base = ["ret_5d", "cum_ret_21d", "rsi_14", "atr_norm", "vol_z20", "dollar_vol_20d"]
+    rank_base = ["ret_5d", "cum_ret_21d", "rsi_14", "atr_norm", "vol_z20",
+                 "dollar_vol_20d", "mom_12_1", "pos_52w"]
     rank_base = [c for c in rank_base if c in df.columns]
     df = _cs_rank(df, rank_base)
     feature_cols = [c for c in df.columns if c not in meta]

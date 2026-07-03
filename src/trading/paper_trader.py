@@ -8,10 +8,11 @@ like a real NSE account rather than a frictionless backtest. Every cash
 movement is recorded in self.ledger as an immutable, broker-style funds
 statement (BUY / SELL / CHARGE / DEPOSIT / WITHDRAWAL / OPENING_BALANCE).
 
-New positions are never opened automatically — only `open_manual` /
-`PaperPortfolio.open_manual`, called from the UI's "Take Trade" button
-(app/utils/writer.open_trade), opens a position, and only at the live CMP
-during market hours (src/trading/market_hours.py).
+Positions open two ways: manually via the UI's "Take Trade" button
+(`open_manual`, app/utils/writer.open_trade, live CMP during market hours),
+or — when cfg.auto_open_signals is on (the weekly ₹20k paper run) — from the
+weekly trade plan via `open_from_plan`, which executes the planner's
+whole-share, budget-checked BUY rows with full cost accounting.
 
 Typical flow
 ------------
@@ -324,13 +325,21 @@ class PaperPortfolio:
     # ------------------------------------------------------------------
     # Update: close positions that hit stop / target / expiry
     # ------------------------------------------------------------------
-    def update(self, price_df: pd.DataFrame) -> list[Trade]:
-        """Close any open position whose stop, target, or horizon was hit."""
+    def update(self, price_df: pd.DataFrame, keep_tickers: set[str] | None = None) -> list[Trade]:
+        """Close any open position whose stop, target, or horizon was hit.
+
+        keep_tickers — turnover hysteresis (docs/small-capital-strategy-plan.md
+        §1.3): a position whose horizon expired but whose ticker is in this set
+        (still ranks above the exit band) is ROLLED (horizon extended) instead
+        of sold-and-rebought, saving the ~0.9% small-account round trip. Stops
+        and targets are always honoured regardless.
+        """
         if not self.open_trades:
             return []
 
         lp     = self._latest_prices(price_df)
         as_of  = self._as_of_str(price_df)
+        keep   = keep_tickers or set()
         closed = []
 
         for trade in self.open_trades:
@@ -346,7 +355,14 @@ class PaperPortfolio:
             elif price <= trade.stop_loss:
                 reason = "stop"
             elif days >= trade.horizon_days:
-                reason = "expired"
+                if trade.ticker in keep:
+                    trade.horizon_days = days + 5   # roll ~one more week
+                    trade.notes = (trade.notes + " | " if trade.notes else "") + \
+                        f"rolled at {as_of} (still above exit band)"
+                    logger.info("  ROLL  %-16s horizon → %d days (hysteresis)",
+                                trade.ticker, trade.horizon_days)
+                else:
+                    reason = "expired"
 
             if reason:
                 self._close_trade(trade, price, as_of, reason)
@@ -359,6 +375,49 @@ class PaperPortfolio:
                 [f"{t.ticker}({t.exit_reason})" for t in closed],
             )
         return closed
+
+    # ------------------------------------------------------------------
+    # Auto-open from the weekly trade plan (flag-gated by cfg.auto_open_signals)
+    # ------------------------------------------------------------------
+    def open_from_plan(self, plan: pd.DataFrame, entry_date: Optional[str] = None) -> list[Trade]:
+        """Open every BUY row of a trade-planner frame, respecting cash and
+        max_positions. Sizing (whole shares within the per-position budget)
+        was already decided by the planner; this just executes it with the
+        same slippage + charge accounting as any other fill."""
+        if plan is None or plan.empty or "action" not in plan.columns:
+            return []
+        entry_date = entry_date or datetime.now().strftime(_DATE_FMT)
+        opened: list[Trade] = []
+        held = {t.ticker for t in self.open_trades}
+
+        for _, r in plan[plan["action"] == "BUY"].iterrows():
+            if len(self.open_trades) >= self.max_positions:
+                logger.info("  plan: max_positions=%d reached — skipping remaining BUYs",
+                            self.max_positions)
+                break
+            if r["ticker"] in held:
+                continue
+            try:
+                trade = self._open_position(
+                    ticker=str(r["ticker"]),
+                    ref_price=float(r["entry_price"]),
+                    shares=int(r["shares"]),
+                    stop_loss=float(r["stop_loss"]),
+                    target_price=float(r["target_price"]),
+                    horizon_days=int(r["horizon_days"]),
+                    prob_up=float(r.get("score", 0.5)),
+                    entry_date=entry_date,
+                    opened_via="signal",
+                    notes="auto-opened from weekly trade plan",
+                )
+                opened.append(trade)
+                held.add(trade.ticker)
+                logger.info("  OPEN  %-16s %d sh @ %.2f (₹%.0f)",
+                            trade.ticker, trade.shares, trade.entry_price,
+                            trade.shares * trade.entry_price)
+            except ValueError as exc:      # insufficient cash — planner/portfolio drifted
+                logger.warning("  plan: could not open %s — %s", r["ticker"], exc)
+        return opened
 
     # ------------------------------------------------------------------
     # Manual open / close (UI-driven, ad-hoc trades)
