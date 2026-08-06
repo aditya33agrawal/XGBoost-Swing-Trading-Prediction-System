@@ -1,0 +1,202 @@
+[
+  {
+    "feature": "atr_norm_rank",
+    "score": 0.062420498579740524
+  },
+  {
+    "feature": "rvol_63d",
+    "score": 0.05076496675610542
+  },
+  {
+    "feature": "park_vol_21",
+    "score": 0.05055740475654602
+  },
+  {
+    "feature": "dist_sma200",
+    "score": 0.039069343358278275
+  },
+  {
+    "feature": "dist_sma50",
+    "score": 0.036046676337718964
+  },
+  {
+    "feature": "beta_63d",
+    "score": 0.03115841932594776
+  },
+  {
+    "feature": "atr_norm",
+    "score": 0.025525828823447227
+  },
+  {
+    "feature": "rsi_14_rank",
+    "score": 0.021189182996749878
+  },
+  {
+    "feature": "breadth_sma50",
+    "score": 0.0195662509649992
+  },
+  {
+    "feature": "pos_52w_rank",
+    "score": 0.01870972104370594
+  },
+  {
+    "feature": "mom_12_1_rank",
+    "score": 0.01725839450955391
+  },
+  {
+    "feature": "rsi_14",
+    "score": 0.015648050233721733
+  },
+  {
+    "feature": "price_pos_63d",
+    "score": 0.01555407140403986
+  },
+  {
+    "feature": "bb_width",
+    "score": 0.014997762627899647
+  },
+  {
+    "feature": "alpha_21d",
+    "score": 0.014691364951431751
+  },
+  {
+    "feature": "cum_ret_63d",
+    "score": 0.014085222966969013
+  },
+  {
+    "feature": "sector_ret_21d",
+    "score": 0.012579814530909061
+  },
+  {
+    "feature": "sharpe_mom_63d",
+    "score": 0.012407899834215641
+  },
+  {
+    "feature": "mom_6_1",
+    "score": 0.012251610867679119
+  },
+  {
+    "feature": "mom_12_1",
+    "score": 0.012235131114721298
+  },
+  {
+    "feature": "dollar_vol_20d_rank",
+    "score": 0.012099814601242542
+  },
+  {
+    "feature": "macd",
+    "score": 0.011935974471271038
+  },
+  {
+    "feature": "idio_vol_63d",
+    "score": 0.011738053523004055
+  },
+  {
+    "feature": "pos_52w",
+    "score": 0.011622175574302673
+  },
+  {
+    "feature": "price_pos_21d",
+    "score": 0.011457542888820171
+  },
+  {
+    "feature": "macd_signal",
+    "score": 0.011035523377358913
+  },
+  {
+    "feature": "amihud_21d",
+    "score": 0.010944729670882225
+  },
+  {
+    "feature": "macd_hist",
+    "score": 0.010816199705004692
+  },
+  {
+    "feature": "dollar_vol_20d",
+    "score": 0.01078971941024065
+  },
+  {
+    "feature": "bb_pctb",
+    "score": 0.010722121223807335
+  },
+  {
+    "feature": "nifty_ret_21d",
+    "score": 0.010721410624682903
+  },
+  {
+    "feature": "rvol_21d",
+    "score": 0.010675798170268536
+  },
+  {
+    "feature": "max_ret_21d",
+    "score": 0.010608656331896782
+  },
+  {
+    "feature": "ret_skew_63d",
+    "score": 0.010528193786740303
+  },
+  {
+    "feature": "nifty_dist_sma50",
+    "score": 0.010496714152395725
+  },
+  {
+    "feature": "ret_vol_corr_21d",
+    "score": 0.010334436781704426
+  },
+  {
+    "feature": "cum_ret_21d_rank",
+    "score": 0.010228060185909271
+  },
+  {
+    "feature": "ret_21d",
+    "score": 0.010169675573706627
+  },
+  {
+    "feature": "nifty_dist_sma200",
+    "score": 0.009987528435885906
+  },
+  {
+    "feature": "stoch_d",
+    "score": 0.009986807592213154
+  },
+  {
+    "feature": "rel_sector_mom_5d",
+    "score": 0.009650877676904202
+  },
+  {
+    "feature": "sector_ret_5d",
+    "score": 0.009348487481474876
+  },
+  {
+    "feature": "month",
+    "score": 0.009238522499799728
+  },
+  {
+    "feature": "ret_3d",
+    "score": 0.009206529706716537
+  },
+  {
+    "feature": "rvol_10d",
+    "score": 0.009155107662081718
+  },
+  {
+    "feature": "stoch_k",
+    "score": 0.009017733857035637
+  },
+  {
+    "feature": "obv_z20",
+    "score": 0.009008945897221565
+  },
+  {
+    "feature": "dist_sma20",
+    "score": 0.008939788676798344
+  },
+  {
+    "feature": "cum_ret_21d",
+    "score": 0.008861499838531017
+  },
+  {
+    "feature": "breadth_sma200",
+    "score": 0.008777893148362637
+  }
+]

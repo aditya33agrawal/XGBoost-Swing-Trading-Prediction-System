@@ -161,3 +161,63 @@ def mark_deployed(
             logger.warning("Could not update model_runs.json: %s", exc)
 
     logger.info("Model %s marked as deployed (previous: %s)", run_id, previous_run_id or "none")
+
+
+# ---------------------------------------------------------------------------
+# Multi-run OOF IC trend — decision input, not just a display (doc §2.2 of the
+# 2026-07-25 weekly-retrain analysis). Pooled OOF IC has sign-flipped across
+# the last three retrains (+0.031 -> -0.034 -> -0.001); a single run's number
+# is not enough evidence of "improvement" on its own.
+# ---------------------------------------------------------------------------
+def load_recent_run_ic_trend(
+    supabase_client,
+    fallback_dir: str = "outputs",
+    n_runs: int = 6,
+) -> list[dict]:
+    """Return the last `n_runs` retrains' (run_id, run_date, oof_ic), oldest first.
+
+    Tries Supabase model_runs first (all rows, not just is_deployed), falls
+    back to the local model_runs.json. Rows with a missing/NaN oof_ic are
+    dropped.
+    """
+    from src.db.supabase_client import fetch_rows
+
+    rows = fetch_rows(supabase_client, "model_runs", order_by="-run_date", limit=n_runs)
+    if not rows:
+        fpath = Path(fallback_dir) / "model_runs.json"
+        if fpath.exists():
+            try:
+                rows = json.loads(fpath.read_text())
+            except Exception as exc:
+                logger.warning("Could not load model_runs.json: %s", exc)
+                rows = []
+
+    trend = [
+        {"run_id": r.get("run_id", ""), "run_date": r.get("run_date", ""), "oof_ic": float(r["oof_ic"])}
+        for r in rows
+        if r.get("oof_ic") is not None and not math.isnan(float(r["oof_ic"]))
+    ]
+    trend.sort(key=lambda r: r["run_date"])
+    return trend[-n_runs:]
+
+
+def summarize_ic_trend(trend: list[dict]) -> str:
+    """One-line, human-readable read on the multi-run IC trend.
+
+    Flags sign-flipping (the specific failure mode from the 2026-07-25 run)
+    as well as a run of same-signed but shrinking/negative IC.
+    """
+    if len(trend) < 2:
+        return "insufficient run history for a trend"
+
+    ics = [r["oof_ic"] for r in trend]
+    signs = [1 if v > 0 else (-1 if v < 0 else 0) for v in ics]
+    n_flips = sum(1 for a, b in zip(signs, signs[1:]) if a != 0 and b != 0 and a != b)
+    n_positive = sum(1 for v in ics if v > 0)
+
+    seq = " -> ".join(f"{v:+.4f}" for v in ics)
+    if n_flips >= len(ics) - 2 and n_flips > 0:
+        return f"UNSTABLE — sign-flipping across last {len(ics)} runs ({seq}); treat this run's IC with caution"
+    if n_positive == 0:
+        return f"WEAK — no positive OOF IC across last {len(ics)} runs ({seq})"
+    return f"{seq} ({n_positive}/{len(ics)} positive)"

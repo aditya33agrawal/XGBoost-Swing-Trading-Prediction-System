@@ -212,8 +212,15 @@ def check_spike_filter(
     df: pd.DataFrame,
     col: str = "close",
     n_sigma: float = 10.0,
+    report_path: str | None = None,
 ) -> pd.DataFrame:
-    """Flag (but don't drop) rows where log-return is > n_sigma from the mean."""
+    """Flag (but don't drop) rows where log-return is > n_sigma from the mean.
+
+    If `report_path` is given and any rows are flagged, dump ticker/date/z-score
+    for every flagged row to that CSV (overwritten each run) so the recurring
+    "N spike rows detected" warning can actually be triaged instead of only
+    being counted — see §2.5 of the 2026-07-25 weekly-retrain analysis.
+    """
     df = df.copy()
     log_ret = (
         df.sort_values(["ticker", "date"])
@@ -221,18 +228,34 @@ def check_spike_filter(
         .transform(lambda s: np.log(s / s.shift(1)))
     )
     mu, sigma = log_ret.mean(), log_ret.std()
-    spike_mask = (log_ret - mu).abs() > n_sigma * sigma
+    z = (log_ret - mu) / sigma
+    spike_mask = z.abs() > n_sigma
     n_spikes = spike_mask.sum()
     if n_spikes > 0:
         print(
             f"[validation] WARNING: {n_spikes} spike rows detected "
             f"(|z| > {n_sigma}σ) — possible unadjusted corporate actions"
         )
+        if report_path:
+            from pathlib import Path
+            report = (
+                df.loc[spike_mask, ["ticker", "date", col]]
+                .assign(z_score=z[spike_mask].values, log_return=log_ret[spike_mask].values)
+                .sort_values(["ticker", "date"])
+            )
+            Path(report_path).parent.mkdir(parents=True, exist_ok=True)
+            report.to_csv(report_path, index=False)
+            print(f"[validation] spike rows written → {report_path} (triage list)")
     df["spike_flag"] = spike_mask.astype(int)
     return df
 
 
-def run_all_gates(df: pd.DataFrame, end: str | None = None, max_lag_days: int = 5) -> pd.DataFrame:
+def run_all_gates(
+    df: pd.DataFrame,
+    end: str | None = None,
+    max_lag_days: int = 5,
+    spike_report_path: str | None = None,
+) -> pd.DataFrame:
     """Run all validation gates.  Returns df augmented with spike_flag.
 
     `end` is the pipeline's requested end-of-fetch date (cfg.end); pass it to
@@ -243,6 +266,6 @@ def run_all_gates(df: pd.DataFrame, end: str | None = None, max_lag_days: int = 
     check_date_gaps(df)
     if end is not None:
         check_freshness(df, end, max_lag_days)
-    df = check_spike_filter(df)
+    df = check_spike_filter(df, report_path=spike_report_path)
     print(f"[validation] all gates passed — {len(df):,} rows, {df['ticker'].nunique()} tickers")
     return df

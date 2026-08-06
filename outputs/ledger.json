@@ -10,7 +10,7 @@
     "amount": 1000000,
     "running_balance": 1000000,
     "note": "Account opened",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "199f2876-5291-4082-a371-419ccd7d5ac4",
@@ -23,7 +23,7 @@
     "amount": -49427.58,
     "running_balance": 950572.42,
     "note": "Bought 51 BAJFINANCE.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "85840f34-c1d1-4619-93cc-16325217ae7d",
@@ -36,7 +36,7 @@
     "amount": -58.63,
     "running_balance": 950513.79,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 49.42757882318114, 'exchange': 1.4679990910484801, 'sebi': 0.04942757882318114, 'stamp': 7.414136823477171, 'gst': 0.273136800576899, 'dp_charge': 0.0, 'total': 58.63227911710688}",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "c38964d0-9bd8-4393-893d-d639e1510cf7",
@@ -49,7 +49,7 @@
     "amount": -91227.14,
     "running_balance": 859286.65,
     "note": "Bought 8 ULTRACEMCO.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "55602bcf-9814-4a69-9a24-e48a64af25c5",
@@ -62,7 +62,7 @@
     "amount": -108.22,
     "running_balance": 859178.44,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 91.22713599999999, 'exchange': 2.7094459391999997, 'sebi': 0.09122713599999999, 'stamp': 13.684070399999996, 'gst': 0.504121153536, 'dp_charge': 0.0, 'total': 108.21600062873598}",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "3fea597b-fca8-47b1-ac4c-719ff491895d",
@@ -75,7 +75,7 @@
     "amount": -40650.01,
     "running_balance": 818528.43,
     "note": "Bought 13 GRASIM.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "a6caafcd-89c6-4a6c-8f92-a7a1cc6cb5d0",
@@ -88,7 +88,7 @@
     "amount": -48.22,
     "running_balance": 818480.21,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 40.65001003540039, 'exchange': 1.2073052980513916, 'sebi': 0.040650010035400384, 'stamp': 6.097501505310058, 'gst': 0.22463195545562256, 'dp_charge': 0.0, 'total': 48.22009880425286}",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "2faebb30-2e9f-41a1-a95d-58be6dd35a11",
@@ -101,7 +101,7 @@
     "amount": -41642.6,
     "running_balance": 776837.61,
     "note": "Bought 30 ICICIBANK.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "90393ade-985b-4b96-bdd7-e004caa4b01d",
@@ -114,7 +114,7 @@
     "amount": -49.4,
     "running_balance": 776788.21,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 41.64259953369141, 'exchange': 1.2367852061506348, 'sebi': 0.041642599533691406, 'stamp': 6.24638993005371, 'gst': 0.2301170050231787, 'dp_charge': 0.0, 'total': 49.397534274452624}",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "36ff8783-214e-41e9-8034-6eab5f8074e3",
@@ -127,7 +127,7 @@
     "amount": -42330.69,
     "running_balance": 734457.52,
     "note": "Bought 44 HINDALCO.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "553996dc-80c1-4754-ac75-c35adc0e08f5",
@@ -140,7 +140,7 @@
     "amount": -50.21,
     "running_balance": 734407.31,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 42.33068732470703, 'exchange': 1.2572214135437987, 'sebi': 0.042330687324707024, 'stamp': 6.349603098706053, 'gst': 0.23391937815633104, 'dp_charge': 0.0, 'total': 50.213761902437916}",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "61f7d662-affa-4df8-b036-6d4b0942afad",
@@ -153,7 +153,7 @@
     "amount": -42973.73,
     "running_balance": 691433.58,
     "note": "Bought 121 TMPV.NS",
-    "run_id": "ui"
+    "run_id": "v20260725"
   },
   {
     "id": "5cb7f1a0-e9bc-4dbd-b97a-429a74ceb883",
@@ -166,6 +166,162 @@
     "amount": -50.98,
     "running_balance": 691382.6,
     "note": "Entry charges: {'brokerage': 0.0, 'stt': 42.97372932147216, 'exchange': 1.2763197608477233, 'sebi': 0.042973729321472164, 'stamp': 6.446059398220824, 'gst': 0.23747282823045518, 'dp_charge': 0.0, 'total': 50.976555038092634}",
-    "run_id": "ui"
+    "run_id": "v20260725"
+  },
+  {
+    "id": "2a07f000-a23b-4dac-ba88-696d58de3c25",
+    "ts": "2026-07-19T16:10:59.980176",
+    "type": "SELL",
+    "trade_id": "18d6248e",
+    "ticker": "BAJFINANCE.NS",
+    "qty": 51,
+    "price": 1055.24,
+    "amount": 53817.43,
+    "running_balance": 745200.03,
+    "note": "Sold 51 BAJFINANCE.NS (target)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "35b5d12b-fbdb-4e33-b39a-365cc5427c84",
+    "ts": "2026-07-19T16:10:59.980234",
+    "type": "CHARGE",
+    "trade_id": "18d6248e",
+    "ticker": "BAJFINANCE.NS",
+    "qty": 51,
+    "price": 1055.24,
+    "amount": -71.7,
+    "running_balance": 745128.34,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 53.817431187744134, 'exchange': 1.598377706276001, 'sebi': 0.05381743118774413, 'stamp': 0.0, 'gst': 0.2973951247434741, 'dp_charge': 15.93, 'total': 71.69702144995136}",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "5ec57ee5-3f47-4a6d-89a0-6bc2e5a8e065",
+    "ts": "2026-07-19T16:10:59.982488",
+    "type": "SELL",
+    "trade_id": "2b1079a0",
+    "ticker": "ULTRACEMCO.NS",
+    "qty": 8,
+    "price": 11715.27,
+    "amount": 93722.18,
+    "running_balance": 838850.52,
+    "note": "Sold 8 ULTRACEMCO.NS (expired)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "74f91e47-20a2-4f2c-a7e2-b2b05a3baa30",
+    "ts": "2026-07-19T16:10:59.982534",
+    "type": "CHARGE",
+    "trade_id": "2b1079a0",
+    "ticker": "ULTRACEMCO.NS",
+    "qty": 8,
+    "price": 11715.27,
+    "amount": -113.05,
+    "running_balance": 838737.47,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 93.722184, 'exchange': 2.7835488647999997, 'sebi': 0.09372218399999999, 'stamp': 0.0, 'gst': 0.5179087887839999, 'dp_charge': 15.93, 'total': 113.04736383758399}",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "d2a1df6a-c837-4543-82d8-df676acaf76f",
+    "ts": "2026-07-19T16:10:59.983232",
+    "type": "SELL",
+    "trade_id": "eea8c730",
+    "ticker": "GRASIM.NS",
+    "qty": 13,
+    "price": 3106.59,
+    "amount": 40385.67,
+    "running_balance": 879123.15,
+    "note": "Sold 13 GRASIM.NS (target)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "cb326326-78b3-4b5c-b98d-e6f4780b5152",
+    "ts": "2026-07-19T16:10:59.983294",
+    "type": "CHARGE",
+    "trade_id": "eea8c730",
+    "ticker": "GRASIM.NS",
+    "qty": 13,
+    "price": 3106.59,
+    "amount": -57.78,
+    "running_balance": 879065.37,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 40.385673265869144, 'exchange': 1.1994544959963134, 'sebi': 0.040385673265869136, 'stamp': 0.0, 'gst': 0.22317123046719284, 'dp_charge': 15.93, 'total': 57.77868466559852}",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "cbf467f2-e662-4bf5-bbfe-e436ea64fdf2",
+    "ts": "2026-07-19T16:10:59.985165",
+    "type": "SELL",
+    "trade_id": "86e35f85",
+    "ticker": "ICICIBANK.NS",
+    "qty": 30,
+    "price": 1442.86,
+    "amount": 43285.67,
+    "running_balance": 922351.04,
+    "note": "Sold 30 ICICIBANK.NS (target)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "f41e7761-4c3e-42fd-9a05-16c282d0f86d",
+    "ts": "2026-07-19T16:10:59.985211",
+    "type": "CHARGE",
+    "trade_id": "86e35f85",
+    "ticker": "ICICIBANK.NS",
+    "qty": 30,
+    "price": 1442.86,
+    "amount": -60.78,
+    "running_balance": 922290.26,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 43.28567246337891, 'exchange': 1.2855844721623535, 'sebi': 0.0432856724633789, 'stamp': 0.0, 'gst': 0.23919662603263184, 'dp_charge': 15.93, 'total': 60.78373923403727}",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "a2ebe5ab-b126-4c40-8f98-ed63b9a7e6bb",
+    "ts": "2026-07-19T16:10:59.985949",
+    "type": "SELL",
+    "trade_id": "ba36edeb",
+    "ticker": "HINDALCO.NS",
+    "qty": 44,
+    "price": 943.21,
+    "amount": 41501.06,
+    "running_balance": 963791.32,
+    "note": "Sold 44 HINDALCO.NS (target)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "ae5ee529-f30c-4c3e-96e2-7a3a57f06040",
+    "ts": "2026-07-19T16:10:59.985995",
+    "type": "CHARGE",
+    "trade_id": "ba36edeb",
+    "ticker": "HINDALCO.NS",
+    "qty": 44,
+    "price": 943.21,
+    "amount": -58.93,
+    "running_balance": 963732.38,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 41.50105847314453, 'exchange': 1.2325814366523926, 'sebi': 0.04150105847314453, 'stamp': 0.0, 'gst': 0.2293348491225967, 'dp_charge': 15.93, 'total': 58.934475817392666}",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "c3a5008b-acf7-4a50-a663-a33da5191eb3",
+    "ts": "2026-07-19T16:10:59.988137",
+    "type": "SELL",
+    "trade_id": "7bd75d9e",
+    "ticker": "TMPV.NS",
+    "qty": 121,
+    "price": 335.26,
+    "amount": 40566.99,
+    "running_balance": 1004299.37,
+    "note": "Sold 121 TMPV.NS (stop)",
+    "run_id": "v20260725"
+  },
+  {
+    "id": "a22502a2-de7b-4d8f-a2de-56b89a268a47",
+    "ts": "2026-07-19T16:10:59.988194",
+    "type": "CHARGE",
+    "trade_id": "7bd75d9e",
+    "ticker": "TMPV.NS",
+    "qty": 121,
+    "price": 335.26,
+    "amount": -57.97,
+    "running_balance": 1004241.41,
+    "note": "Exit charges: {'brokerage': 0.0, 'stt': 40.566993137786866, 'exchange': 1.2048396961922698, 'sebi': 0.04056699313778686, 'stamp': 0.0, 'gst': 0.2241732040794102, 'dp_charge': 15.93, 'total': 57.96657303119633}",
+    "run_id": "v20260725"
   }
 ]

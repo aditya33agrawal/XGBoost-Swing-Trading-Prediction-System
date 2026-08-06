@@ -274,6 +274,27 @@ def _walk_forward_predict(
 
     all_preds = [r[1] for r in results if r is not None and r[1] is not None]
     logger.info("Walk-forward done in %.1fs", time.time() - t_wf)
+
+    # HPO health metric (§2.4 of the 2026-07-25 weekly-retrain analysis): how
+    # often does early stopping land on (or past) the Optuna n_estimators
+    # ceiling? A high hit-rate means the search space is truncating the true
+    # optimum rather than early stopping converging naturally.
+    ceiling = best_params.get("n_estimators")
+    if ceiling:
+        all_best_iters = [
+            bi for r in results if r is not None and r[2] is not None
+            for bi in r[2]["best_iters"] if bi is not None
+        ]
+        if all_best_iters:
+            n_at_ceiling = sum(1 for bi in all_best_iters if bi >= ceiling - 1)
+            hit_rate = n_at_ceiling / len(all_best_iters)
+            logger.info(
+                "n_estimators ceiling-hit diagnostic: %d/%d bag fits (%.1f%%) landed at/near "
+                "the search-space ceiling (n_estimators=%d) — high hit-rate means the ceiling "
+                "is truncating the true optimum.",
+                n_at_ceiling, len(all_best_iters), 100 * hit_rate, ceiling,
+            )
+
     return pd.concat(all_preds, ignore_index=True) if all_preds else pd.DataFrame()
 
 
@@ -557,6 +578,12 @@ def predict_latest(
     if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
         regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
         if regime_val < 0:
+            n_suppressed = int((out["signal"] == "LONG").sum())
+            logger.warning(
+                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f) "
+                "— forcing all-NEUTRAL for this run",
+                n_suppressed, regime_val,
+            )
             out["signal"] = "NEUTRAL"
 
     # top_n=None → return the full scored universe (signal already marks the
@@ -627,6 +654,12 @@ def predict_latest_surface(
     if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
         regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
         if regime_val < 0:
+            n_suppressed = int((out["signal"] == "LONG").sum())
+            logger.warning(
+                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f) "
+                "— forcing all-NEUTRAL for this run",
+                n_suppressed, regime_val,
+            )
             out["signal"] = "NEUTRAL"
 
     # top_n=None → return the full scored universe (see predict_latest).
@@ -698,7 +731,10 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     print("\n[Phase 1b] Validation gates …")
     try:
-        price_df = run_all_gates(price_df, end=cfg.end)
+        price_df = run_all_gates(
+            price_df, end=cfg.end,
+            spike_report_path=f"{cfg.output_dir}/spike_rows_report.csv",
+        )
         # Index/VIX feed — OHLCV sanity (§2b.6) + alignment with the stock feed
         # (the upstream cause of the zero-signal incident).
         run_index_gates(index_df)
@@ -882,7 +918,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     # ------------------------------------------------------------------
     # Phase 4: Walk-forward OOF predictions + backtest
     # ------------------------------------------------------------------
-    stats: dict = {"data_quality": _data_quality}   # §2b.9 snapshot persisted to metadata
+    stats: dict = {"data_quality": _data_quality, "supabase_connected": _sb is not None}   # §2b.9 snapshot persisted to metadata
     oof_preds: pd.DataFrame = pd.DataFrame()
     sens: pd.DataFrame = pd.DataFrame()
 
@@ -1005,6 +1041,16 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             top_n=cfg.signals_top_n,
             return_model=True,
         )
+
+    # Regime-filter visibility (mirrors the condition inside predict_latest /
+    # predict_latest_surface) so a zero-LONG week is self-explanatory from
+    # `stats` alone, without grepping logs. See §2.1 of the weekly-retrain
+    # 2026-07-25 analysis: this used to be a silent kill switch.
+    stats["regime_filter_active"] = False
+    if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in df_full.columns:
+        _latest_regime_row = df_full[df_full["date"] == df_full["date"].max()]
+        if not _latest_regime_row.empty:
+            stats["regime_filter_active"] = float(_latest_regime_row[cfg.regime_sma_col].iloc[0]) < 0
 
     # Phase 5b: Enrich with ATR-based entry / stop / target levels
     if not signals.empty:
@@ -1213,6 +1259,14 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
             n_ledger = sync_ledger(portfolio, _run_id, _sb, fallback_dir=cfg.output_dir)
             if n_ledger:
                 logger.info("Synced %d ledger rows to Supabase", n_ledger)
+
+    if cfg.save_to_supabase and _sb is None:
+        print("\n" + "!" * 72)
+        print("!! SUPABASE UNREACHABLE THIS RUN — all writes fell back to local JSON.")
+        print("!! model_runs/predictions/feature_importance/paper_trades/account_ledger")
+        print("!! were NOT synced to the DB. The dashboard and the 4-week rolling IC")
+        print("!! gate (should_retrain) are reading STALE data until this is fixed.")
+        print("!" * 72)
 
     print("\n" + "=" * 72)
     print("Pipeline complete.")
