@@ -52,7 +52,7 @@ from src.models.horizon_selection import select_horizon, diagnose_horizon_distri
 from src.models.calibration import TimeOrderedCalibrator
 from src.validation.walk_forward import PurgedWalkForward
 from src.validation.metrics import (
-    information_coefficient, directional_accuracy, summarise,
+    information_coefficient, directional_accuracy, top1_hit_rate, summarise,
     daily_information_coefficient, ic_information_ratio,
     deflated_sharpe_ratio, block_bootstrap_ci,
 )
@@ -934,15 +934,22 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         n_dates = oof_preds["date"].nunique() if not oof_preds.empty else 0
         print(f"  generated predictions for {n_dates} dates")
 
-        oof_ic = oof_dir_acc = None
+        oof_ic = oof_dir_acc = oof_top1_hit_rate = None
         ic_ir_stats: dict = {}
         if not oof_preds.empty:
             # Pooled IC (legacy, kept for run-to-run continuity) — conflates
             # cross-sectional skill with time-series/market-level effects.
             oof_ic = float(information_coefficient(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
-            oof_dir_acc = float(directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
             print(f"  OOF Information Coefficient (pooled) = {oof_ic:.4f}")
-            print(f"  OOF Directional Accuracy             = {oof_dir_acc:.4f}")
+            if cfg.ranker_enabled:
+                # sign(pred)==sign(fwd_ret) is meaningless for a rank:ndcg score
+                # (doc §2.2) — report the rank-based equivalent instead and
+                # skip the misleading sign-based number entirely.
+                oof_top1_hit_rate = float(top1_hit_rate(oof_preds, target_col="fwd_ret"))
+                print(f"  OOF Top-1 Hit Rate (rank-based)       = {oof_top1_hit_rate:.4f}")
+            else:
+                oof_dir_acc = float(directional_accuracy(oof_preds["pred"].values, oof_preds["fwd_ret"].values))
+                print(f"  OOF Directional Accuracy             = {oof_dir_acc:.4f}")
 
             # Daily cross-sectional IC + IC-IR (plan §A1 / Phase 0) — the
             # statistically honest measure of stock-picking skill, with a
@@ -986,6 +993,7 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         if oof_ic is not None:
             stats["oof_ic"] = oof_ic
             stats["oof_dir_acc"] = oof_dir_acc
+            stats["oof_top1_hit_rate"] = oof_top1_hit_rate
             stats["oof_ic_daily_mean"] = ic_ir_stats.get("mean_ic")
             stats["oof_ic_ir"] = ic_ir_stats.get("ic_ir")
             stats["oof_ic_t_stat"] = ic_ir_stats.get("t_stat")
@@ -1100,14 +1108,21 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     if cfg.save_bundle and final_model is not None:
         try:
             bundle_metrics = {
-                "oof_ic":       stats.get("oof_ic"),
-                "oof_dir_acc":  stats.get("oof_dir_acc"),
-                "sharpe_net":   stats.get("Sharpe"),
-                "sortino":      stats.get("Sortino"),
-                "calmar":       stats.get("Calmar"),
-                "max_drawdown": stats.get("max_drawdown"),
-                "hit_rate":     stats.get("hit_rate"),
-                "calib_err":    None if (_oos_ece != _oos_ece) else _oos_ece,
+                "oof_ic":            stats.get("oof_ic"),
+                "oof_dir_acc":       stats.get("oof_dir_acc"),
+                "oof_top1_hit_rate": stats.get("oof_top1_hit_rate"),
+                "sharpe_net":        stats.get("Sharpe"),
+                "sortino":           stats.get("Sortino"),
+                "calmar":            stats.get("Calmar"),
+                "max_drawdown":      stats.get("max_drawdown"),
+                "hit_rate":          stats.get("hit_rate"),
+                "calib_err":         None if (_oos_ece != _oos_ece) else _oos_ece,
+                # Needed by the promotion gate's absolute quality floors and
+                # Sharpe-margin champion comparison (doc §2.3) — previously
+                # only pooled `oof_ic` was persisted here, so the champion's
+                # metrics dict was always missing these when read back.
+                "ic_t_stat":         stats.get("oof_ic_t_stat"),
+                "deflated_sharpe":   stats.get("deflated_sharpe"),
             }
             # final_model is a {(h,tau): [model,...]} dict in the dynamic-horizon
             # branch (predict_latest_surface) — no single scalar model to save.

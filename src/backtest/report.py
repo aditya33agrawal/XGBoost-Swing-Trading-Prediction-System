@@ -124,6 +124,7 @@ def build_backtest_report(
         "oof_metrics": {
             "oof_ic": stats.get("oof_ic"),
             "oof_dir_acc": stats.get("oof_dir_acc"),
+            "oof_top1_hit_rate": stats.get("oof_top1_hit_rate"),
             "oof_ic_daily_mean": stats.get("oof_ic_daily_mean"),
             "oof_ic_ir": stats.get("oof_ic_ir"),
             "oof_ic_t_stat": stats.get("oof_ic_t_stat"),
@@ -225,7 +226,8 @@ Generated: {report.get('generated_utc')}
 
 ## OOF metrics
 - OOF IC (pooled, legacy): {oof.get('oof_ic')}
-- OOF directional accuracy: {oof.get('oof_dir_acc')}
+- OOF directional accuracy (non-ranker only — meaningless for rank:ndcg, see oof_top1_hit_rate): {oof.get('oof_dir_acc')}
+- OOF Top-1 hit rate (ranker mode — does the #1-ranked ticker land in the top half of realised returns that day): {oof.get('oof_top1_hit_rate')}
 - OOF daily IC (mean cross-sectional Spearman per date): {oof.get('oof_ic_daily_mean')}
 - OOF IC-IR (mean/std of daily IC) / t-stat / n_days: {oof.get('oof_ic_ir')} / {oof.get('oof_ic_t_stat')} / {oof.get('oof_ic_n_days')}
 

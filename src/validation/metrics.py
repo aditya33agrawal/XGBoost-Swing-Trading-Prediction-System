@@ -23,10 +23,48 @@ def information_coefficient(y_pred: np.ndarray, y_true: np.ndarray) -> float:
 
 
 def directional_accuracy(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    """sign(y_pred) == sign(y_true) match rate.
+
+    Only meaningful when `y_pred` has a natural zero-crossing tied to
+    predicted direction (e.g. a centered P(up) probability). NOT meaningful
+    for LambdaMART/`rank:ndcg` scores, which are trained only to preserve
+    within-day ordering and carry no guarantee about their sign — see
+    `top1_hit_rate` for the ranker-appropriate equivalent (doc §2.2).
+    """
     mask = ~(np.isnan(y_pred) | np.isnan(y_true))
     if mask.sum() == 0:
         return np.nan
     return float(np.mean(np.sign(y_pred[mask]) == np.sign(y_true[mask])))
+
+
+def top1_hit_rate(
+    preds: pd.DataFrame,
+    pred_col: str = "pred",
+    target_col: str = "fwd_ret",
+    date_col: str = "date",
+) -> float:
+    """Rank-appropriate directional-quality metric for LTR/ranker models.
+
+    Per day, does the ticker the model ranks #1 (highest `pred_col`) land in
+    the top half of that day's realised returns? Unlike `directional_accuracy`,
+    this only depends on the *ordering* `pred_col` induces, not its sign or
+    scale — the property a `rank:ndcg` score actually has a guarantee about.
+    Returns the mean hit rate across days with >=2 tickers (days with a
+    single ticker have no meaningful "top half").
+    """
+    def _hit(g: pd.DataFrame) -> float:
+        g = g.dropna(subset=[pred_col, target_col])
+        if len(g) < 2:
+            return np.nan
+        top_pred_ticker_idx = g[pred_col].idxmax()
+        median_ret = g[target_col].median()
+        return float(g.loc[top_pred_ticker_idx, target_col] >= median_ret)
+
+    hits = preds.groupby(date_col, sort=True).apply(_hit, include_groups=False)
+    hits = hits.dropna()
+    if hits.empty:
+        return float("nan")
+    return float(hits.mean())
 
 
 # ---------------------------------------------------------------------------

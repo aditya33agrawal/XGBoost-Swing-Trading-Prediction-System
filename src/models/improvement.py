@@ -123,6 +123,59 @@ def load_current_model_ic(
 
 
 # ---------------------------------------------------------------------------
+# Load the deployed model's FULL metrics dict (doc §2.3 fix)
+# ---------------------------------------------------------------------------
+def load_current_model_metrics(
+    supabase_client,
+    fallback_dir: str = "outputs",
+    registry_root: str = ".",
+    n_recent_weeks: int = 4,
+) -> tuple[dict, str]:
+    """Return (deployed model's full metrics dict, run_id).
+
+    `load_current_model_ic` only ever returns pooled `oof_ic` — `model_runs`
+    (Supabase/JSON) was never extended to carry `sharpe_net`/`ic_t_stat`/
+    `deflated_sharpe`, so the promotion gate's champion dict was always
+    missing them and silently fell through to the noisier pooled-IC
+    comparison path instead of the Sharpe-margin one it was designed to
+    prefer (`src/registry/promotion.py`). Those fields ARE persisted per-run,
+    just in the registry bundle instead: `{registry_root}/registry/bundles/
+    model_<run_id>/metrics.json` (written by `save_bundle` in
+    `src/pipeline/runner.py`). This reads the deployed run_id the same way
+    `load_current_model_ic` does, then pulls its full metrics from that file.
+
+    Returns ({}, "") if no deployed model exists. Returns a dict containing at
+    least {"ic": pooled_ic} even if the bundle metrics file is missing (e.g.
+    bundle pruned by `keep_bundles`) — the pooled IC is always available from
+    model_runs, everything else is best-effort.
+    """
+    pooled_ic, run_id = load_current_model_ic(supabase_client, fallback_dir, n_recent_weeks)
+    if not run_id:
+        return {}, ""
+
+    metrics: dict = {}
+    bundle_metrics_path = Path(registry_root) / "registry" / "bundles" / f"model_{run_id}" / "metrics.json"
+    if bundle_metrics_path.exists():
+        try:
+            metrics = json.loads(bundle_metrics_path.read_text())
+        except Exception as exc:
+            logger.warning("Could not load bundle metrics for %s: %s", run_id, exc)
+
+    # promotion.evaluate_promotion() looks for either "ic" or "oof_ic" — make
+    # sure pooled IC (from model_runs, always available) is present under
+    # "oof_ic" even when the bundle file is missing/pruned.
+    if metrics.get("ic") is None and metrics.get("oof_ic") is None and not math.isnan(pooled_ic):
+        metrics["oof_ic"] = pooled_ic
+
+    logger.info(
+        "Current deployed model: %s  metrics=%s",
+        run_id, {k: v for k, v in metrics.items() if k in
+                 ("ic", "oof_ic", "sharpe_net", "ic_t_stat", "deflated_sharpe")},
+    )
+    return metrics, run_id
+
+
+# ---------------------------------------------------------------------------
 # Mark a model as deployed in Supabase and local JSON
 # ---------------------------------------------------------------------------
 def mark_deployed(

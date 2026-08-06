@@ -213,6 +213,7 @@ def check_spike_filter(
     col: str = "close",
     n_sigma: float = 10.0,
     report_path: str | None = None,
+    persistence_days: int = 5,
 ) -> pd.DataFrame:
     """Flag (but don't drop) rows where log-return is > n_sigma from the mean.
 
@@ -220,13 +221,23 @@ def check_spike_filter(
     for every flagged row to that CSV (overwritten each run) so the recurring
     "N spike rows detected" warning can actually be triaged instead of only
     being counted — see §2.5 of the 2026-07-25 weekly-retrain analysis.
+
+    Each row also gets an automated `likely_cause` classification (doc §2.6,
+    2026-08-06 plan): a genuine unadjusted corporate action (split/bonus)
+    shifts the price to a new *permanent* level, while a vendor data glitch
+    (bad print, decimal error) typically reverts within a few sessions. We
+    approximate this by comparing the log-return of the jump itself to the
+    log-return measured `persistence_days` sessions later relative to the
+    pre-jump price — if most of the jump persists, it's classified
+    "likely_corporate_action"; if it reverts, "likely_data_error"; if there
+    isn't enough post-jump history yet, "insufficient_history_to_classify".
+    This doesn't replace a human check but turns the CSV into an actual
+    triage list instead of raw ticker/date rows nobody has opened in 4 runs.
     """
     df = df.copy()
-    log_ret = (
-        df.sort_values(["ticker", "date"])
-        .groupby("ticker")[col]
-        .transform(lambda s: np.log(s / s.shift(1)))
-    )
+    df = df.sort_values(["ticker", "date"])
+    close_by_ticker = df.groupby("ticker")[col]
+    log_ret = close_by_ticker.transform(lambda s: np.log(s / s.shift(1)))
     mu, sigma = log_ret.mean(), log_ret.std()
     z = (log_ret - mu) / sigma
     spike_mask = z.abs() > n_sigma
@@ -238,14 +249,46 @@ def check_spike_filter(
         )
         if report_path:
             from pathlib import Path
+
+            # Persistence check: jump log-return vs. the log-return measured
+            # from just-before-the-jump to `persistence_days` sessions later.
+            # A ratio near 1 means the level shift stuck (real corporate
+            # action); a ratio near 0 (or opposite sign) means it reverted
+            # (data glitch).
+            pre_jump_price = close_by_ticker.transform(lambda s: s.shift(1))
+            post_jump_price = close_by_ticker.transform(lambda s: s.shift(-persistence_days))
+            persisted_log_ret = np.log(post_jump_price / pre_jump_price)
+            persistence_ratio = persisted_log_ret / log_ret
+
+            def _classify(ratio: float) -> str:
+                if pd.isna(ratio):
+                    return "insufficient_history_to_classify"
+                if ratio >= 0.7:
+                    return "likely_corporate_action"
+                if ratio <= 0.2:
+                    return "likely_data_error"
+                return "ambiguous"
+
             report = (
                 df.loc[spike_mask, ["ticker", "date", col]]
-                .assign(z_score=z[spike_mask].values, log_return=log_ret[spike_mask].values)
+                .assign(
+                    z_score=z[spike_mask].values,
+                    log_return=log_ret[spike_mask].values,
+                    persistence_ratio=persistence_ratio[spike_mask].values,
+                )
                 .sort_values(["ticker", "date"])
             )
+            report["likely_cause"] = report["persistence_ratio"].apply(_classify)
             Path(report_path).parent.mkdir(parents=True, exist_ok=True)
             report.to_csv(report_path, index=False)
-            print(f"[validation] spike rows written → {report_path} (triage list)")
+            n_glitch = (report["likely_cause"] == "likely_data_error").sum()
+            n_corp = (report["likely_cause"] == "likely_corporate_action").sum()
+            print(
+                f"[validation] spike rows written → {report_path} (triage list) — "
+                f"auto-classified: {n_corp} likely corporate actions, "
+                f"{n_glitch} likely data errors, "
+                f"{len(report) - n_corp - n_glitch} ambiguous/insufficient history"
+            )
     df["spike_flag"] = spike_mask.astype(int)
     return df
 
