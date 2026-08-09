@@ -577,12 +577,13 @@ def predict_latest(
     # today, suppress all LONGs and stay flat regardless of model scores.
     if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
         regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
-        if regime_val < 0:
+        regime_off = float(getattr(cfg, "regime_off_threshold", 0.0))
+        if regime_val < regime_off:
             n_suppressed = int((out["signal"] == "LONG").sum())
             logger.warning(
-                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f) "
-                "— forcing all-NEUTRAL for this run",
-                n_suppressed, regime_val,
+                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f "
+                "< off-threshold %.4f) — forcing all-NEUTRAL for this run",
+                n_suppressed, regime_val, regime_off,
             )
             out["signal"] = "NEUTRAL"
 
@@ -653,12 +654,13 @@ def predict_latest_surface(
 
     if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in latest_df.columns:
         regime_val = float(latest_df[cfg.regime_sma_col].iloc[0])
-        if regime_val < 0:
+        regime_off = float(getattr(cfg, "regime_off_threshold", 0.0))
+        if regime_val < regime_off:
             n_suppressed = int((out["signal"] == "LONG").sum())
             logger.warning(
-                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f) "
-                "— forcing all-NEUTRAL for this run",
-                n_suppressed, regime_val,
+                "regime_filter suppressed %d candidate LONGs (nifty_dist_sma200=%.4f "
+                "< off-threshold %.4f) — forcing all-NEUTRAL for this run",
+                n_suppressed, regime_val, regime_off,
             )
             out["signal"] = "NEUTRAL"
 
@@ -990,6 +992,12 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
         # Phase 4b: Cost-adjusted backtest
         print("\n[Phase 4b] Backtest with Indian transaction costs …")
         stats = run_backtest(oof_preds, cfg)   # returns a fresh dict
+        # Hand the walk-forward prediction frame back to the caller. Every
+        # tradeability diagnostic (basket-size decay, decile spread, regime
+        # and hysteresis ablations) is a re-read of this frame and takes
+        # seconds — without it the notebook would have to repeat the ~4.6h
+        # walk-forward to ask a different question of the same predictions.
+        stats["oof_preds"] = oof_preds
         if oof_ic is not None:
             stats["oof_ic"] = oof_ic
             stats["oof_dir_acc"] = oof_dir_acc
@@ -1058,7 +1066,10 @@ def run(cfg: Config | None = None) -> tuple[dict, pd.DataFrame]:
     if getattr(cfg, "regime_filter", False) and cfg.regime_sma_col in df_full.columns:
         _latest_regime_row = df_full[df_full["date"] == df_full["date"].max()]
         if not _latest_regime_row.empty:
-            stats["regime_filter_active"] = float(_latest_regime_row[cfg.regime_sma_col].iloc[0]) < 0
+            stats["regime_filter_active"] = (
+                float(_latest_regime_row[cfg.regime_sma_col].iloc[0])
+                < float(getattr(cfg, "regime_off_threshold", 0.0))
+            )
 
     # Phase 5b: Enrich with ATR-based entry / stop / target levels
     if not signals.empty:

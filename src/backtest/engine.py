@@ -139,7 +139,7 @@ def run_backtest(
         # applies once), then we sit in cash until the regime turns back on.
         if use_regime:
             regime_val = float(day[regime_col].iloc[0])
-            if regime_val < 0:
+            if regime_val < float(getattr(cfg, "regime_off_threshold", 0.0)):
                 turn_long = 1.0 if prev_long else 0.0
                 period_rets.append(-rt_cost * turn_long)
                 dates_traded.append(date)
@@ -265,9 +265,15 @@ def run_backtest_bucketed_sleeves(
 def sensitivity_analysis(
     preds: pd.DataFrame,
     cfg,
-    cost_multipliers: list[float] = (0.5, 1.0, 1.5, 2.0),
+    cost_multipliers: list[float] = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0),
 ) -> pd.DataFrame:
-    """Vary cost assumptions and report Sharpe across scenarios."""
+    """Vary cost assumptions and report Sharpe across scenarios.
+
+    The multipliers run to 4× because the ₹20k account's real round-trip cost
+    is ~2× what a ₹1L position pays, and a bad-fill week can double that
+    again — the old 2.0× ceiling stopped exactly where the small account
+    starts.
+    """
     base_cost = base_rt_cost_fraction(cfg)
     rows = []
     for mult in cost_multipliers:
@@ -279,3 +285,89 @@ def sensitivity_analysis(
             "max_drawdown": result.get("max_drawdown", np.nan),
         })
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Tradeability diagnostics (2026-08-09 review)
+# ---------------------------------------------------------------------------
+# Everything above measures the model on the whole cross-section. A ₹20k
+# account holds ~5 names, so what actually matters is whether the alpha
+# *concentrates at the top of the book* — a pooled/daily IC computed over 196
+# names can be positive and significant while the top 5 are pure noise. The
+# 2026-08-08 run showed exactly that shape (daily IC t=2.21, but top-1 hit
+# rate 0.4989 = chance), which is why these two functions exist: they answer
+# "is there edge where I can actually trade" without another retrain.
+# ---------------------------------------------------------------------------
+def basket_size_decay(
+    preds: pd.DataFrame,
+    cfg,
+    sizes: list[int] = (1, 3, 5, 10, 20, 40),
+    rt_cost_override: float | None = None,
+) -> pd.DataFrame:
+    """Net Sharpe/CAGR of the top-N book for each N in `sizes`.
+
+    Re-runs the vectorised backtest with `cfg.top_k_positions` forced to each
+    N, holding everything else (costs, regime overlay, hysteresis) fixed. A
+    healthy stock-picking model decays *monotonically* — top-5 beats top-40 on
+    Sharpe, because the strongest signal is at the top. A flat or inverted
+    curve means the model ranks the broad cross-section better than it ranks
+    its own best ideas, and a concentrated small-capital book is untradeable
+    no matter how good the pooled IC looks.
+    """
+    from copy import copy
+
+    rows = []
+    for n in sizes:
+        n_cfg = copy(cfg)
+        n_cfg.top_k_positions = int(n)
+        result = run_backtest(preds, n_cfg, rt_cost_override=rt_cost_override)
+        rows.append({
+            "top_k": int(n),
+            "Sharpe": result.get("Sharpe", np.nan),
+            "CAGR": result.get("CAGR", np.nan),
+            "max_drawdown": result.get("max_drawdown", np.nan),
+            "hit_rate": result.get("hit_rate", np.nan),
+            "avg_period_ret": result.get("avg_period_ret", np.nan),
+        })
+    return pd.DataFrame(rows)
+
+
+def decile_spread(
+    preds: pd.DataFrame,
+    n_buckets: int = 10,
+    pred_col: str = "pred",
+    target_col: str = "fwd_ret",
+    date_col: str = "date",
+) -> pd.DataFrame:
+    """Mean realised forward return by predicted decile, pooled over days.
+
+    The rawest possible read on whether the score orders returns at all, with
+    no cost/portfolio machinery in between. Buckets are formed *within each
+    day* (cross-sectional), then averaged, so this measures stock-picking and
+    not market drift. Monotone increasing = real ordering skill; a noisy
+    non-monotone curve with a weak top-vs-bottom spread = no tradeable edge.
+    """
+    df = preds.dropna(subset=[pred_col, target_col]).copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    def _bucket(g: pd.DataFrame) -> pd.Series:
+        if len(g) < n_buckets:
+            return pd.Series(np.nan, index=g.index)
+        return pd.Series(
+            pd.qcut(g[pred_col].rank(method="first"), n_buckets, labels=False),
+            index=g.index,
+        )
+
+    df["bucket"] = df.groupby(date_col, group_keys=False)[[pred_col]].apply(_bucket)
+    df = df.dropna(subset=["bucket"])
+    if df.empty:
+        return pd.DataFrame()
+
+    out = (
+        df.groupby("bucket")[target_col]
+        .agg(mean_fwd_ret="mean", n="size")
+        .reset_index()
+    )
+    out["bucket"] = out["bucket"].astype(int) + 1
+    return out.sort_values("bucket").reset_index(drop=True)

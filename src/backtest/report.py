@@ -29,12 +29,15 @@ def _regime_overlay_stats(oof_preds: pd.DataFrame, cfg) -> dict:
     if not use_regime or oof_preds is None or oof_preds.empty or regime_col not in oof_preds.columns:
         return {"enabled": use_regime, "flat_fraction": None}
     per_date = oof_preds.groupby("date")[regime_col].first()
-    flat_fraction = float((per_date < 0).mean()) if len(per_date) else None
+    off_threshold = float(getattr(cfg, "regime_off_threshold", 0.0))
+    is_flat = per_date < off_threshold
+    flat_fraction = float(is_flat.mean()) if len(per_date) else None
     return {
         "enabled": True,
         "regime_col": regime_col,
+        "off_threshold": off_threshold,
         "n_rebalance_dates": int(len(per_date)),
-        "n_flat_dates": int((per_date < 0).sum()),
+        "n_flat_dates": int(is_flat.sum()),
         "flat_fraction": round(flat_fraction, 3) if flat_fraction is not None else None,
     }
 

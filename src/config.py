@@ -80,7 +80,16 @@ class Config:
     # nifty_dist_sma200 *feature* — that caps drawdown in sustained bear
     # markets.  Applied in both the backtest and live signal generation.
     regime_filter:  bool = True
-    regime_sma_col: str  = "nifty_dist_sma200"   # <0 ⇒ index below 200-SMA ⇒ risk-off
+    regime_sma_col: str  = "nifty_dist_sma200"   # distance of index from its 200-SMA
+    # Risk-off only when the index is MORE THAN this far below its 200-SMA.
+    # A hard cut at exactly 0 is a knife edge: the 2026-08-08 run suppressed
+    # every LONG on nifty_dist_sma200 = -0.0079, i.e. the index was 0.79%
+    # below a noisy 200-day average — well inside the noise band of the
+    # signal itself. That produced 5 consecutive zero-signal weeks and
+    # starved paper trading of any evidence at all. -2% keeps the overlay's
+    # actual job (sit out sustained bear markets) while ignoring the chop
+    # around the line. Set to 0.0 to restore the old knife-edge behaviour.
+    regime_off_threshold: float = -0.02
 
     # --- costs -----------------------------------------------------------
     cost_bps_per_side: float = 20.0       # ~40 bps round-trip (STT+slip)
