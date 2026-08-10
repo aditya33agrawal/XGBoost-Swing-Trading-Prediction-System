@@ -489,5 +489,18 @@ def build_features(
     df = _cs_rank(df, rank_base)
     feature_cols = [c for c in df.columns if c not in meta]
 
+    # Downcast feature columns float64 -> float32. Every downstream copy in the
+    # walk-forward loop (train_df/val_df/test_df, then X_tr/X_vl/X_te sliced
+    # from them) is full-width, and with MAX_PARALLEL_FITS concurrent threads
+    # each holding an expanding-window copy near the end of the walk-forward
+    # run, float64 was the difference between fitting in host RAM and OOM-ing
+    # partway through (observed: crash at ~step 310/471 on a free Colab
+    # runtime). float32 halves every one of those copies; XGBoost trains on
+    # float32 natively (it casts to float32 internally anyway) so this is not
+    # a precision trade-off for tree models.
+    f64_cols = [c for c in feature_cols if df[c].dtype == np.float64]
+    if f64_cols:
+        df[f64_cols] = df[f64_cols].astype(np.float32)
+
     print(f"[features] {len(feature_cols)} features built for {df['ticker'].nunique()} tickers")
     return df, feature_cols
